@@ -1,33 +1,44 @@
 --[[ 
     ESP / Utility Suite (Click GUI, Purple Theme) - FULL VERSION
     - AutoFarm entfernt
-    - Teleports fixed mit tweenTeleport()
+    - Chest & Camp Teleport = identisch wie früherer AutoFarm (Step-TP)
     - getMainPart() mit BoundingBox-Fallback
+    - GUI komplett mit Toggles, Chest/Camp TP Fenstern, Uninject & Intro
 ]]
 
 --// Services
-local Players         = game:GetService("Players")
-local RunService      = game:GetService("RunService")
-local Workspace       = game:GetService("Workspace")
-local TweenService    = game:GetService("TweenService")
-local Debris          = game:GetService("Debris")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local Workspace        = game:GetService("Workspace")
+local TweenService     = game:GetService("TweenService") -- (wird hier nicht mehr fürs TP genutzt)
+local Debris           = game:GetService("Debris")
+local UserInputService = game:GetService("UserInputService")
 
-local localPlayer     = Players.LocalPlayer
-local playerGui       = localPlayer:WaitForChild("PlayerGui")
+local localPlayer      = Players.LocalPlayer
+local playerGui        = localPlayer:WaitForChild("PlayerGui")
 
 --// Config
 local CONFIG = {
-    ENABLED              = true,
-    SHOW_CHESTS          = true,
-    SHOW_ITEMS           = true,
-    SHOW_RESOURCES       = true,
-    SHOW_PLAYERS         = true,
-    SHOW_NPCS            = true,
-    SHOW_MOBS            = true,
-    SHOW_FLOWERS         = true,
-    SHOW_STICKS          = true,
-    MAX_DISPLAY_DISTANCE = 600,
-    FARM_OFFSET_Y        = 4,
+    ENABLED               = true,
+
+    SHOW_CHESTS           = true,
+    SHOW_ITEMS            = true,
+    SHOW_RESOURCES        = true,
+    SHOW_PLAYERS          = true,
+    SHOW_NPCS             = true,
+    SHOW_MOBS             = true,
+
+    SHOW_FLOWERS          = true,
+    SHOW_STICKS           = true,
+
+    MAX_DISPLAY_DISTANCE  = 600,
+
+    -- Step-TP Offset (wie früher im AutoFarm)
+    STEP_TP_OFFSET_Y      = 4,
+    -- wie oft pro Klick "gesetzt" wird (kleine Steps, verhindert AntiCheat Glitches)
+    STEP_TP_REPEAT        = 12,
+    -- Wartezeit zwischen den Steps
+    STEP_TP_DELAY         = 0.05,
 }
 
 -- Colors
@@ -48,7 +59,7 @@ local COLORS = {
 }
 
 -- Internal State
-local objectData       = {}
+local objectData       = {}   -- [Instance] = {billboard, label, category}
 local connections      = {}
 local screenGui        = nil
 local destroyed        = false
@@ -76,7 +87,10 @@ local SETS = {
     CAMP     = {"camp","campfire","lagerfeuer","firepit","fire pit"},
 }
 
--- Utils
+--=============================
+-- Utils / Helpers
+--=============================
+
 local function lower(s)
     local ok, v = pcall(function() return s:lower() end)
     return ok and v or ""
@@ -96,18 +110,23 @@ local function colorFor(name, category)
     return COLORS.text
 end
 
--- Teleport Helper
-local function tweenTeleport(root, targetPos)
-    local tween = TweenService:Create(root, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {CFrame = CFrame.new(targetPos)})
-    tween:Play()
-    tween.Completed:Wait()
+-- Step-TP (ehem. AutoFarm-Stil)
+local function stepTeleport(root, destination)
+    -- Ziel auf Offset in Y anheben, um Bodenkollision zu meiden
+    local targetPos = destination + Vector3.new(0, CONFIG.STEP_TP_OFFSET_Y, 0)
+    for i = 1, CONFIG.STEP_TP_REPEAT do
+        if not root or not root.Parent then return end
+        root.CFrame = CFrame.new(targetPos)
+        task.wait(CONFIG.STEP_TP_DELAY)
+    end
 end
 
--- MainPart Finder (mit BoundingBox fallback)
+-- Robust MainPart ermitteln (mit BoundingBox-Fallback)
 local function getMainPart(obj)
+    if not obj or not obj.Parent then return nil end
     if obj:IsA("Model") then
         if obj.PrimaryPart then return obj.PrimaryPart end
-        for _, nm in ipairs({"HumanoidRootPart","Handle","Torso"}) do
+        for _, nm in ipairs({"HumanoidRootPart","Handle","Torso","Head"}) do
             local p = obj:FindFirstChild(nm)
             if p and p:IsA("BasePart") then return p end
         end
@@ -115,8 +134,16 @@ local function getMainPart(obj)
             if ch:IsA("BasePart") then return ch end
         end
         -- Fallback: BoundingBox
-        local cf, size = obj:GetBoundingBox()
+        local cf = CFrame.new()
+        local ok, cfOrErr, _ = pcall(function() return obj:GetBoundingBox() end)
+        if ok and typeof(cfOrErr) == "CFrame" then
+            cf = cfOrErr
+        else
+            -- Im Zweifel bzgl. Weltursprung
+            cf = obj:GetModelCFrame and obj:GetModelCFrame() or CFrame.new()
+        end
         local dummy = Instance.new("Part")
+        dummy.Name = "__ESP_TP_Anchor"
         dummy.Anchored = true
         dummy.CanCollide = false
         dummy.Size = Vector3.new(1,1,1)
@@ -127,27 +154,40 @@ local function getMainPart(obj)
         return dummy
     elseif obj:IsA("BasePart") then
         return obj
+    elseif obj:IsA("Humanoid") and obj.Parent then
+        return obj.Parent:FindFirstChild("HumanoidRootPart")
     end
     return nil
 end
+
+local function isAliveCharacter(model)
+    if not model or not model:IsA("Model") then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
 --=============================
--- ESP / Registration / Updates
+-- Kategorie-Erkennung
 --=============================
 
--- Kategorie-Erkennung
 local function getCategory(obj)
     local n = lower(obj.Name)
 
-    -- optionale "Kleinkram" → Resource
-    if n:find("flower") or n:find("blume") then return "RESOURCE" end
-    if n:find("stick")  or n:find("branch") or n:find("ast") then return "RESOURCE" end
+    -- Flowers/Blumen -> Resource (optional)
+    if n:find("flower") or n:find("blume") then
+        return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
+    end
+    -- Sticks/Zweige -> Resource (optional)
+    if n:find("stick") or n:find("branch") or n:find("ast") then
+        return CONFIG.SHOW_STICKS and "RESOURCE" or nil
+    end
 
     -- Camps (Model oder Part)
     for _, key in ipairs(SETS.CAMP) do
         if n:find(key) then return "CAMP" end
     end
 
-    -- Nur Models werden als Chest getaggt
+    -- Chests: bevorzugt Model
     if obj:IsA("Model") then
         for _, key in ipairs(SETS.CHEST) do
             if n:find(key) then return "CHEST" end
@@ -159,19 +199,21 @@ local function getCategory(obj)
         return "PLAYER"
     end
 
-    -- Rest
+    -- Weitere Kategorien
     for cat, list in pairs(SETS) do
         if cat ~= "CHEST" and cat ~= "CAMP" then
             for _, key in ipairs(list) do
                 if n:find(key) then
-                    if cat == "RESOURCE" then return "RESOURCE" end
+                    if cat == "RESOURCE" then
+                        return "RESOURCE"
+                    end
                     return cat
                 end
             end
         end
     end
 
-    -- Tools/Models mit Handle
+    -- Tools/Model mit Handle
     if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then
         return "ITEM"
     end
@@ -179,10 +221,12 @@ local function getCategory(obj)
     return nil
 end
 
--- ESP-Objekt erstellen
+--=============================
+-- ESP
+--=============================
+
 local function createESP(obj, category)
-    local mainPart = getMainPart(obj)
-    if not mainPart then return end
+    local mainPart = getMainPart(obj); if not mainPart then return end
 
     local bb = Instance.new("BillboardGui")
     bb.Name = "ESPBillboard"
@@ -233,7 +277,6 @@ local function removeESP(obj)
     end
 end
 
--- Duplikate vermeiden (wenn Parent bereits registriert)
 local function isChildOfRegistered(obj)
     local parent = obj.Parent
     while parent do
@@ -255,7 +298,7 @@ local function unregisterObject(obj)
     removeESP(obj)
 end
 
--- Initialer Scan (Top-Level + eine Ebene tiefer)
+-- Initial Scan (top-level + eine Ebene)
 for _, o in ipairs(Workspace:GetChildren()) do
     registerObject(o)
     for _, m in ipairs(o:GetChildren()) do
@@ -263,13 +306,13 @@ for _, o in ipairs(Workspace:GetChildren()) do
     end
 end
 
--- Leichte Listener (keine schweren Gesamt-Rescans)
+-- Listener
 table.insert(connections, Workspace.DescendantAdded:Connect(function(o)
     task.defer(registerObject, o)
 end))
 table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
 
--- Render-Update
+-- Update Loop (Visibility)
 table.insert(connections, RunService.RenderStepped:Connect(function()
     if destroyed then return end
     for obj, data in pairs(objectData) do
@@ -285,16 +328,24 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
             )
 
         if active then
-            data.billboard.Enabled = true
-            data.label.TextColor3 = colorFor(obj.Name, data.category)
+            if data.billboard then
+                data.billboard.Enabled = true
+                if data.label then
+                    data.label.TextColor3 = colorFor(obj.Name, data.category)
+                end
+            end
         else
-            data.billboard.Enabled = false
+            if data.billboard then
+                data.billboard.Enabled = false
+            end
         end
     end
 end))
+
 --=============================
 -- GUI (Click-GUI, Purple Theme)
 --=============================
+
 screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ESP_ClickGUI"
 screenGui.ResetOnSpawn = false
@@ -312,7 +363,7 @@ rootDockBtn.Font = Enum.Font.GothamBold
 rootDockBtn.Parent = screenGui
 do local c=Instance.new("UICorner",rootDockBtn); c.CornerRadius = UDim.new(0,8) end
 
--- Main panel
+-- Main Panel
 mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.fromOffset(320, 520)
 mainFrame.Position = UDim2.fromOffset(20, 60)
@@ -404,19 +455,19 @@ local function createToggle(label, default, onChange)
     return c
 end
 
--- Sichtbarkeits-Toggles
-createToggle("Enable ESP", CONFIG.ENABLED, function(v) CONFIG.ENABLED = v end)
-createToggle("Show Chests", CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end)
-createToggle("Show Items", CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end)
-createToggle("Show Resources", CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end)
-createToggle("Show Players", CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end)
-createToggle("Show NPCs", CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end)
-createToggle("Show Mobs", CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end)
-createToggle("Show Flowers", true, function(v) end) -- nur UI, Logik oben
-createToggle("Show Sticks", true, function(v) end)  -- nur UI, Logik oben
+-- Visibility Section
+createToggle("Enable ESP", CONFIG.ENABLED,                function(v) CONFIG.ENABLED = v end)
+createToggle("Show Chests", CONFIG.SHOW_CHESTS,           function(v) CONFIG.SHOW_CHESTS = v end)
+createToggle("Show Items", CONFIG.SHOW_ITEMS,             function(v) CONFIG.SHOW_ITEMS = v end)
+createToggle("Show Resources", CONFIG.SHOW_RESOURCES,     function(v) CONFIG.SHOW_RESOURCES = v end)
+createToggle("Show Players", CONFIG.SHOW_PLAYERS,         function(v) CONFIG.SHOW_PLAYERS = v end)
+createToggle("Show NPCs", CONFIG.SHOW_NPCS,               function(v) CONFIG.SHOW_NPCS = v end)
+createToggle("Show Mobs", CONFIG.SHOW_MOBS,               function(v) CONFIG.SHOW_MOBS = v end)
+createToggle("Show Flowers", CONFIG.SHOW_FLOWERS,         function(v) CONFIG.SHOW_FLOWERS = v end)
+createToggle("Show Sticks", CONFIG.SHOW_STICKS,           function(v) CONFIG.SHOW_STICKS = v end)
 addSpacer(6)
 
--- Chest Teleport toggle
+-- Chest Teleport Toggle
 tpToggleBtn = Instance.new("TextButton")
 tpToggleBtn.Size = UDim2.new(1, -4, 0, 34)
 tpToggleBtn.BackgroundColor3 = COLORS.accent
@@ -428,7 +479,7 @@ tpToggleBtn.Parent = sectionScroll
 do local c=Instance.new("UICorner",tpToggleBtn); c.CornerRadius = UDim.new(0,8) end
 addSpacer(6)
 
--- Camp Teleport toggle
+-- Camp Teleport Toggle
 campToggleBtn = Instance.new("TextButton")
 campToggleBtn.Size = UDim2.new(1, -4, 0, 34)
 campToggleBtn.BackgroundColor3 = COLORS.accent
@@ -458,7 +509,7 @@ uninjectBtn.TextScaled = true
 uninjectBtn.Parent = uninjectBtnContainer
 do local c=Instance.new("UICorner",uninjectBtn); c.CornerRadius = UDim.new(0,8) end
 
--- Layout pass
+-- Layout Pass
 do
     local total = 0
     for _, ch in ipairs(sectionScroll:GetChildren()) do
@@ -470,8 +521,7 @@ do
     sectionScroll.CanvasSize = UDim2.new(0, 0, 0, total + 10)
 end
 
--- Collapse
-local collapsed = false
+-- Collapse Logic
 local function setCollapsed(v)
     collapsed = v
     collapseBtn.Text = v and "Show" or "Hide"
@@ -482,9 +532,11 @@ collapseBtn.MouseButton1Click:Connect(function() setCollapsed(not collapsed) end
 rootDockBtn.MouseButton1Click:Connect(function()
     mainFrame.Visible = not mainFrame.Visible
 end)
+
 --=============================
--- Teleport Fenster (Chest)
+-- Chest Teleport Window
 --=============================
+
 tpFrame = Instance.new("Frame")
 tpFrame.Size = UDim2.fromOffset(260, 360)
 tpFrame.Position = UDim2.fromOffset(360, 60)
@@ -510,12 +562,6 @@ tpList.ScrollBarThickness = 6
 tpList.BackgroundTransparency = 1
 tpList.Parent = tpFrame
 
-local function getRoot()
-    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-    local root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 1)
-    return char, root
-end
-
 local function refreshTpList()
     if not tpList then return end
     tpList:ClearAllChildren()
@@ -527,19 +573,18 @@ local function refreshTpList()
             btn.Position = UDim2.new(0, 2, 0, y)
             btn.BackgroundColor3 = COLORS.accent
             btn.TextColor3 = COLORS.text
-            btn.Text = data.label.Text
+            btn.Text = data.label and data.label.Text or "Chest"
             btn.Font = Enum.Font.Gotham
             btn.TextScaled = true
             btn.Parent = tpList
             do local c=Instance.new("UICorner",btn); c.CornerRadius = UDim.new(0,8) end
 
             btn.MouseButton1Click:Connect(function()
-                local char, root = getRoot()
+                local char = localPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
                 local mp = getMainPart(obj)
                 if root and mp then
-                    -- exakt wie AutoFarm-TP: tweenTeleport mit Offset Y
-                    local target = mp.Position + Vector3.new(0, CONFIG.FARM_OFFSET_Y, 0)
-                    tweenTeleport(root, target)
+                    stepTeleport(root, mp.Position)
                     tpFrame.Visible = false
                 end
             end)
@@ -560,8 +605,9 @@ table.insert(connections, RunService.Stepped:Connect(function()
 end))
 
 --=============================
--- Teleport Fenster (Camp)
+-- Camp Teleport Window
 --=============================
+
 campFrame = Instance.new("Frame")
 campFrame.Size = UDim2.fromOffset(260, 360)
 campFrame.Position = UDim2.fromOffset(360, 440)
@@ -598,18 +644,18 @@ local function refreshCampList()
             btn.Position = UDim2.new(0, 2, 0, y)
             btn.BackgroundColor3 = COLORS.accent
             btn.TextColor3 = COLORS.text
-            btn.Text = data.label.Text
+            btn.Text = data.label and data.label.Text or "Camp"
             btn.Font = Enum.Font.Gotham
             btn.TextScaled = true
             btn.Parent = campList
             do local c=Instance.new("UICorner",btn); c.CornerRadius = UDim.new(0,8) end
 
             btn.MouseButton1Click:Connect(function()
-                local char, root = getRoot()
+                local char = localPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
                 local mp = getMainPart(obj)
                 if root and mp then
-                    local target = mp.Position + Vector3.new(0, CONFIG.FARM_OFFSET_Y, 0)
-                    tweenTeleport(root, target)
+                    stepTeleport(root, mp.Position)
                     campFrame.Visible = false
                 end
             end)
@@ -632,6 +678,7 @@ end))
 --=============================
 -- Uninject
 --=============================
+
 local function uninject()
     destroyed = true
 
@@ -688,4 +735,4 @@ do
     end)
 end
 
-print("ESP / Utility Suite loaded: GUI + Chest/Camp TP (tweenTeleport) + Uninject + Intro (ohne AutoFarm)")
+print("ESP / Utility Suite loaded: GUI + Chest/Camp Step-TP + Uninject + Intro")
