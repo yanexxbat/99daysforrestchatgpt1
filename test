@@ -1,10 +1,10 @@
 --[[ 
-    ESP / Utility Suite (Click GUI, Purple Theme) - VERBESSERTE VERSION
-    - Camp Teleport GEFIXT
-    - Namen Toggle einzeln funktionsfähig
-    - ESP Labels bewegen sich mit Entities mit
-    - Performance optimiert
-    - Bessere Kategorisierung
+    Noctis Utility - ESP Suite (Clean Checkbox GUI)
+    - Clean checkbox design with vertical sections
+    - Fixed flower detection (no longer detected as chests)
+    - English menu
+    - Horizontal checkbox layout
+    - Optimized performance
 ]]
 
 --// Services
@@ -22,13 +22,13 @@ local playerGui        = localPlayer:WaitForChild("PlayerGui")
 local CONSTANTS = {
     GUI_REFRESH_INTERVAL = 0.3,
     DUMMY_PART_LIFETIME = 0.5,
-    MIN_GUI_HEIGHT = 34,
-    LAYOUT_SPACING = 6,
+    CHECKBOX_SIZE = 18,
+    LAYOUT_SPACING = 8,
     MAX_STEP_TP_REPEAT = 25,
     ESP_UPDATE_INTERVAL = 0.1,
 }
 
---// Config - GEFIXT: Einzelne Toggle für Namen
+--// Config
 local CONFIG = {
     ENABLED               = true,
     
@@ -39,13 +39,13 @@ local CONFIG = {
     SHOW_PLAYERS          = true,
     SHOW_NPCS             = true,
     SHOW_MOBS             = true,
-    SHOW_CAMPS            = true,  -- GEFIXT: Eigener Toggle für Camps
+    SHOW_CAMPS            = true,
     
     -- Sub-category toggles
     SHOW_FLOWERS          = true,
     SHOW_STICKS           = true,
     
-    -- Name display toggles - NEU!
+    -- Name display toggles
     SHOW_CHEST_NAMES      = true,
     SHOW_ITEM_NAMES       = true,
     SHOW_RESOURCE_NAMES   = true,
@@ -64,20 +64,22 @@ local CONFIG = {
 
 -- Colors
 local COLORS = {
-    bgDark   = Color3.fromRGB(18, 12, 24),
-    bgMid    = Color3.fromRGB(30, 22, 42),
-    accent   = Color3.fromRGB(148, 87, 235),
-    accent2  = Color3.fromRGB(121, 72, 201),
-    ok       = Color3.fromRGB(70, 190, 120),
-    off      = Color3.fromRGB(180, 70, 70),
-    text     = Color3.fromRGB(235, 232, 245),
-    chest    = Color3.fromRGB(250, 220, 80),
-    resource = Color3.fromRGB(140, 160, 255),
-    npc      = Color3.fromRGB(60, 220, 120),
-    mob      = Color3.fromRGB(235, 80, 80),
-    player   = Color3.fromRGB(80, 230, 230),
-    camp     = Color3.fromRGB(255, 150, 100),
-    item     = Color3.fromRGB(255, 200, 100),
+    bgDark   = Color3.fromRGB(22, 22, 28),
+    bgMid    = Color3.fromRGB(32, 32, 42),
+    bgLight  = Color3.fromRGB(42, 42, 55),
+    accent   = Color3.fromRGB(120, 80, 200),
+    accent2  = Color3.fromRGB(100, 65, 180),
+    success  = Color3.fromRGB(65, 180, 110),
+    danger   = Color3.fromRGB(220, 70, 70),
+    text     = Color3.fromRGB(240, 240, 250),
+    textSub  = Color3.fromRGB(180, 180, 190),
+    chest    = Color3.fromRGB(255, 215, 80),
+    resource = Color3.fromRGB(100, 150, 255),
+    npc      = Color3.fromRGB(80, 220, 120),
+    mob      = Color3.fromRGB(255, 90, 90),
+    player   = Color3.fromRGB(80, 220, 255),
+    camp     = Color3.fromRGB(255, 140, 80),
+    item     = Color3.fromRGB(255, 180, 100),
 }
 
 -- Internal State
@@ -93,24 +95,31 @@ local campCounter      = 0
 local campIdByObject   = setmetatable({}, {__mode="k"})
 
 -- GUI Refs
-local rootDockBtn, mainFrame, sectionScroll
-local tpFrame, tpList, tpToggleBtn
-local campFrame, campList, campToggleBtn
-local uninjectBtn
+local rootDockBtn, mainFrame, contentFrame
+local tpFrame, tpList, campFrame, campList
 local collapsed = false
 
 -- Performance tracking
 local lastRefreshTime = {chest = 0, camp = 0, esp = 0}
 local refreshDebounce = {}
 
--- VERBESSERTE Kategorie Sets
+-- FIXED: Better category detection (flowers won't be detected as chests)
 local SETS = {
-    CHEST    = {"chest", "crate", "loot", "treasure", "box", "kiste"},
+    -- Specific chest keywords (avoiding flower conflicts)
+    CHEST    = {"chest", "crate", "loot", "treasure", "box", "kiste", "container"},
+    -- Items and tools
     ITEM     = {"axe", "sword", "bow", "key", "potion", "food", "bread", "meat", "bandage", "tool", "weapon"},
-    RESOURCE = {"wood", "stone", "ore", "coal", "log", "tree", "rock", "iron", "gold", "diamond"},
+    -- Resources (flowers and sticks handled separately)
+    RESOURCE = {"wood", "stone", "ore", "coal", "log", "tree", "rock", "iron", "gold", "diamond", "crystal"},
+    -- NPCs
     NPC      = {"alien", "cultist", "npc", "villager", "soldier", "guard", "merchant", "trader"},
+    -- Mobs/Enemies
     MOB      = {"wolf", "bear", "rat", "spider", "skeleton", "zombie", "mob", "enemy", "monster"},
+    -- Camps/Fires
     CAMP     = {"camp", "campfire", "lagerfeuer", "firepit", "fire pit", "bonfire", "flame", "fire"},
+    -- Special categories
+    FLOWER   = {"flower", "blume", "blossom", "petal", "bloom"},
+    STICK    = {"stick", "branch", "ast", "twig", "zweig"},
 }
 
 --=============================
@@ -124,7 +133,6 @@ local function lower(s)
 end
 
 local function colorFor(name, category)
-    local n = lower(name)
     if category == "CHEST"    then return COLORS.chest end
     if category == "RESOURCE" then return COLORS.resource end
     if category == "NPC"      then return COLORS.npc end
@@ -132,17 +140,10 @@ local function colorFor(name, category)
     if category == "PLAYER"   then return COLORS.player end
     if category == "CAMP"     then return COLORS.camp end
     if category == "ITEM"     then return COLORS.item end
-    
-    -- Spezielle Item-Farben
-    if n:find("sword") or n:find("weapon") then return Color3.fromRGB(240,120,120) end
-    if n:find("bow") or n:find("gun") then return Color3.fromRGB(240,170,100) end
-    if n:find("axe") or n:find("tool") then return Color3.fromRGB(120,240,120) end
-    if n:find("potion") or n:find("food") then return Color3.fromRGB(120,200,240) end
-    
     return COLORS.text
 end
 
--- GEFIXT: Verbesserter Step-TP
+-- Step teleport function
 local function stepTeleport(root, destination)
     if not root or not root.Parent then 
         warn("stepTeleport: Invalid root part")
@@ -156,41 +157,35 @@ local function stepTeleport(root, destination)
     local repeatCount = math.min(CONFIG.STEP_TP_REPEAT, CONSTANTS.MAX_STEP_TP_REPEAT)
     local targetPos = destination + Vector3.new(0, CONFIG.STEP_TP_OFFSET_Y, 0)
     
-    -- Teleport in kleineren Schritten für bessere AntiCheat-Umgehung
     for i = 1, repeatCount do
         if not root or not root.Parent then 
-            warn("stepTeleport: Root destroyed during teleport at step " .. i)
             return false 
         end
         
-        local success, err = pcall(function()
+        local success = pcall(function()
             root.CFrame = CFrame.new(targetPos)
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0) -- Velocity reset
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         end)
         
         if not success then
-            warn("stepTeleport: CFrame assignment failed at step " .. i .. ": " .. tostring(err))
             return false
         end
         
         task.wait(CONFIG.STEP_TP_DELAY)
     end
     
-    print("Successfully teleported to " .. tostring(destination))
     return true
 end
 
--- GEFIXT: Robustere MainPart-Erkennung
+-- Get main part function
 local function getMainPart(obj)
     if not obj or not obj.Parent then return nil end
     
     if obj:IsA("Model") then
-        -- Erst PrimaryPart prüfen
         if obj.PrimaryPart and obj.PrimaryPart.Parent then 
             return obj.PrimaryPart 
         end
         
-        -- Dann häufige Part-Namen
         local commonNames = {"HumanoidRootPart", "Torso", "UpperTorso", "Handle", "Head", "Root"}
         for _, nm in ipairs(commonNames) do
             local p = obj:FindFirstChild(nm)
@@ -199,15 +194,13 @@ local function getMainPart(obj)
             end
         end
         
-        -- Dann beliebigen BasePart finden
         for _, ch in ipairs(obj:GetDescendants()) do
             if ch:IsA("BasePart") and ch.Parent then 
                 return ch 
             end
         end
         
-        -- Als letzter Ausweg: Dummy Part mit BoundingBox
-        local success, cf, size = pcall(function() 
+        local success, cf = pcall(function() 
             return obj:GetBoundingBox() 
         end)
         
@@ -234,12 +227,6 @@ local function getMainPart(obj)
     return nil
 end
 
-local function isAliveCharacter(model)
-    if not model or not model:IsA("Model") then return false end
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    return hum and hum.Health > 0
-end
-
 local function debouncedCall(key, func, delay)
     delay = delay or 0.1
     if refreshDebounce[key] then return end
@@ -248,9 +235,9 @@ local function debouncedCall(key, func, delay)
     task.spawn(function()
         task.wait(delay)
         if not destroyed then
-            local success, err = pcall(func)
+            local success = pcall(func)
             if not success then
-                warn("Debounced call failed for " .. key .. ": " .. tostring(err))
+                warn("Debounced call failed for " .. key)
             end
         end
         refreshDebounce[key] = nil
@@ -258,7 +245,7 @@ local function debouncedCall(key, func, delay)
 end
 
 --=============================
--- VERBESSERTE Kategorie-Erkennung
+-- FIXED: Better Category Detection
 --=============================
 
 local function getCategory(obj)
@@ -266,34 +253,42 @@ local function getCategory(obj)
     
     local n = lower(obj.Name)
     
-    -- Spieler zuerst prüfen
+    -- Players first
     if Players:GetPlayerFromCharacter(obj) then
         return "PLAYER"
     end
     
-    -- Spezielle Sub-Kategorien
-    if n:find("flower") or n:find("blume") then
-        return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
-    end
-    if n:find("stick") or n:find("branch") or n:find("ast") or n:find("twig") then
-        return CONFIG.SHOW_STICKS and "RESOURCE" or nil
+    -- FIXED: Check flowers FIRST before other categories
+    for _, keyword in ipairs(SETS.FLOWER) do
+        if n:find(keyword) then
+            return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
+        end
     end
     
-    -- Hauptkategorien durchgehen
+    -- FIXED: Check sticks separately 
+    for _, keyword in ipairs(SETS.STICK) do
+        if n:find(keyword) then
+            return CONFIG.SHOW_STICKS and "RESOURCE" or nil
+        end
+    end
+    
+    -- Main categories (flowers already handled above)
     for category, keywords in pairs(SETS) do
-        for _, keyword in ipairs(keywords) do
-            if n:find(keyword) then
-                return category
+        if category ~= "FLOWER" and category ~= "STICK" then
+            for _, keyword in ipairs(keywords) do
+                if n:find(keyword) then
+                    return category
+                end
             end
         end
     end
     
-    -- Tools als Items klassifizieren
+    -- Tools as items
     if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then
         return "ITEM"
     end
     
-    -- Models mit Humanoid als NPCs (falls nicht bereits als Spieler erkannt)
+    -- Models with humanoid as NPCs
     if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
         return "NPC"
     end
@@ -302,17 +297,15 @@ local function getCategory(obj)
 end
 
 --=============================
--- VERBESSERTES ESP System
+-- ESP System
 --=============================
 
--- GEFIXT: ESP Labels bewegen sich mit Entities mit
 local function createESP(obj, category)
     if not obj or not category then return end
     
     local mainPart = getMainPart(obj)
     if not mainPart then return end
 
-    -- BillboardGui erstellen
     local bb = Instance.new("BillboardGui")
     bb.Name = "ESPBillboard"
     bb.Size = UDim2.new(0, 200, 0, 32)
@@ -320,21 +313,19 @@ local function createESP(obj, category)
     bb.AlwaysOnTop = true
     bb.MaxDistance = CONFIG.MAX_DISPLAY_DISTANCE
     bb.LightInfluence = 0
-    bb.Adornee = mainPart  -- WICHTIG: Das sorgt dafür, dass es sich mitbewegt!
+    bb.Adornee = mainPart
     bb.Parent = mainPart
 
-    -- TextLabel erstellen
     local tl = Instance.new("TextLabel")
     tl.Size = UDim2.new(1, 0, 1, 0)
     tl.BackgroundTransparency = 1
     tl.TextScaled = true
-    tl.Font = Enum.Font.GothamBold
-    tl.TextStrokeTransparency = 0.1
+    tl.Font = Enum.Font.GothamSemibold
+    tl.TextStrokeTransparency = 0.2
     tl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     tl.TextColor3 = colorFor(obj.Name, category)
     tl.Parent = bb
 
-    -- Text basierend auf Kategorie setzen
     local displayText = ""
     if category == "CHEST" then
         if not chestIdByObject[obj] then
@@ -358,7 +349,6 @@ local function createESP(obj, category)
     tl.Text = displayText
     objectData[obj] = {billboard = bb, label = tl, category = category, mainPart = mainPart}
     
-    -- Connection für Part-Änderungen
     local connection
     connection = obj.AncestryChanged:Connect(function()
         if not obj.Parent then
@@ -384,26 +374,16 @@ local function removeESP(obj)
     end
 end
 
-local function isChildOfRegistered(obj)
-    local parent = obj.Parent
-    while parent and parent ~= Workspace do
-        if objectData[parent] then return true end
-        parent = parent.Parent
-    end
-    return false
-end
-
 local function registerObject(obj)
     if destroyed or not obj or not obj.Parent then return end
-    if isChildOfRegistered(obj) then return end
     if objectData[obj] then return end
     
     local category = getCategory(obj)
     if not category then return end
     
-    local success, err = pcall(createESP, obj, category)
+    local success = pcall(createESP, obj, category)
     if not success then
-        warn("Failed to create ESP for " .. tostring(obj) .. ": " .. tostring(err))
+        warn("Failed to create ESP for object")
     end
 end
 
@@ -412,25 +392,24 @@ local function unregisterObject(obj)
     removeESP(obj)
 end
 
--- Initiale Registrierung
+-- Initial registration
 task.spawn(function()
     for _, obj in ipairs(Workspace:GetChildren()) do
         registerObject(obj)
-        -- Auch Kinder registrieren
         for _, child in ipairs(obj:GetChildren()) do
             registerObject(child)
         end
     end
 end)
 
--- Event Listeners
+-- Event listeners
 table.insert(connections, Workspace.DescendantAdded:Connect(function(obj)
     task.defer(registerObject, obj)
 end))
 
 table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
 
--- GEFIXT: Verbesserter Update-Loop für ESP Sichtbarkeit
+-- ESP update loop
 local lastESPUpdate = 0
 table.insert(connections, RunService.Heartbeat:Connect(function()
     if destroyed then return end
@@ -456,7 +435,6 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
             (cat == "CAMP"     and CONFIG.SHOW_CAMPS)
         )
         
-        -- Namen-Toggle prüfen
         local shouldShowName = shouldShow and (
             (cat == "CHEST"    and CONFIG.SHOW_CHEST_NAMES) or
             (cat == "ITEM"     and CONFIG.SHOW_ITEM_NAMES) or
@@ -480,50 +458,47 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
 end))
 
 --=============================
--- VERBESSERTE GUI (Click-GUI, Purple Theme)
+-- CLEAN GUI (Checkbox Design)
 --=============================
 
 screenGui = Instance.new("ScreenGui")
-screenGui.Name = "ESP_ClickGUI_Improved"
+screenGui.Name = "NoctisUtility"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
 -- Dock Button
 rootDockBtn = Instance.new("TextButton")
-rootDockBtn.Size = UDim2.fromOffset(120, 32)
+rootDockBtn.Size = UDim2.fromOffset(130, 32)
 rootDockBtn.Position = UDim2.fromOffset(20, 20)
 rootDockBtn.BackgroundColor3 = COLORS.accent
 rootDockBtn.TextColor3 = COLORS.text
-rootDockBtn.Text = "ESP Menu"
+rootDockBtn.Text = "Noctis Utility"
 rootDockBtn.TextScaled = true
 rootDockBtn.Font = Enum.Font.GothamBold
 rootDockBtn.Parent = screenGui
-local corner1 = Instance.new("UICorner", rootDockBtn)
-corner1.CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", rootDockBtn).CornerRadius = UDim.new(0, 8)
 
 -- Main Frame
 mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.fromOffset(380, 650)
+mainFrame.Size = UDim2.fromOffset(400, 500)
 mainFrame.Position = UDim2.fromOffset(20, 60)
 mainFrame.BackgroundColor3 = COLORS.bgDark
 mainFrame.Visible = true
 mainFrame.Parent = screenGui
-local corner2 = Instance.new("UICorner", mainFrame)
-corner2.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
 
 -- Header
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 50)
+header.Size = UDim2.new(1, 0, 0, 45)
 header.BackgroundColor3 = COLORS.bgMid
 header.Parent = mainFrame
-local corner3 = Instance.new("UICorner", header)
-corner3.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -100, 1, 0)
 title.Position = UDim2.new(0, 15, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "ESP Control Panel"
+title.Text = "Noctis Utility"
 title.TextColor3 = COLORS.text
 title.TextScaled = true
 title.Font = Enum.Font.GothamBold
@@ -531,87 +506,63 @@ title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = header
 
 local collapseBtn = Instance.new("TextButton")
-collapseBtn.Size = UDim2.fromOffset(80, 32)
-collapseBtn.Position = UDim2.new(1, -90, 0, 9)
+collapseBtn.Size = UDim2.fromOffset(75, 28)
+collapseBtn.Position = UDim2.new(1, -85, 0, 8)
 collapseBtn.BackgroundColor3 = COLORS.accent2
 collapseBtn.TextColor3 = COLORS.text
 collapseBtn.Text = "Hide"
-collapseBtn.Font = Enum.Font.GothamBold
+collapseBtn.Font = Enum.Font.GothamSemibold
 collapseBtn.TextScaled = true
 collapseBtn.Parent = header
-local corner4 = Instance.new("UICorner", collapseBtn)
-corner4.CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", collapseBtn).CornerRadius = UDim.new(0, 6)
 
--- Scroll Frame
-sectionScroll = Instance.new("ScrollingFrame")
-sectionScroll.Size = UDim2.new(1, -20, 1, -70)
-sectionScroll.Position = UDim2.new(0, 10, 0, 60)
-sectionScroll.BackgroundTransparency = 1
-sectionScroll.ScrollBarThickness = 8
-sectionScroll.ScrollBarImageColor3 = COLORS.accent
-sectionScroll.Parent = mainFrame
+-- Content Frame with ScrollingFrame
+contentFrame = Instance.new("ScrollingFrame")
+contentFrame.Size = UDim2.new(1, -20, 1, -65)
+contentFrame.Position = UDim2.new(0, 10, 0, 55)
+contentFrame.BackgroundTransparency = 1
+contentFrame.ScrollBarThickness = 6
+contentFrame.ScrollBarImageColor3 = COLORS.accent
+contentFrame.Parent = mainFrame
 
-local function addSpacer(height)
-    local spacer = Instance.new("Frame")
-    spacer.Size = UDim2.new(1, 0, 0, height or 8)
-    spacer.BackgroundTransparency = 1
-    spacer.Parent = sectionScroll
-end
-
--- VERBESSERTE Toggle Factory
-local function createToggle(labelText, defaultValue, onChange, description)
+-- Checkbox Factory
+local function createCheckbox(labelText, defaultValue, onChange)
     local container = Instance.new("Frame")
-    container.Size = UDim2.new(1, -8, 0, description and 50 or 38)
-    container.BackgroundColor3 = COLORS.bgMid
-    container.Parent = sectionScroll
-    local corner = Instance.new("UICorner", container)
-    corner.CornerRadius = UDim.new(0, 8)
+    container.Size = UDim2.new(0, 150, 0, 28)
+    container.BackgroundTransparency = 1
+    container.Parent = contentFrame
+
+    local checkbox = Instance.new("TextButton")
+    checkbox.Size = UDim2.fromOffset(CONSTANTS.CHECKBOX_SIZE, CONSTANTS.CHECKBOX_SIZE)
+    checkbox.Position = UDim2.new(0, 0, 0, 4)
+    checkbox.BackgroundColor3 = defaultValue and COLORS.success or COLORS.bgLight
+    checkbox.Text = defaultValue and "✓" or ""
+    checkbox.TextColor3 = COLORS.text
+    checkbox.TextScaled = true
+    checkbox.Font = Enum.Font.GothamBold
+    checkbox.Parent = container
+    Instance.new("UICorner", checkbox).CornerRadius = UDim.new(0, 4)
 
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -120, description and 0.6 or 1, 0)
-    label.Position = UDim2.new(0, 12, 0, 0)
+    label.Size = UDim2.new(1, -30, 1, 0)
+    label.Position = UDim2.new(0, 30, 0, 0)
     label.BackgroundTransparency = 1
     label.Text = labelText
     label.TextColor3 = COLORS.text
     label.TextScaled = true
-    label.Font = Enum.Font.GothamMedium
+    label.Font = Enum.Font.Gotham
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = container
-    
-    if description then
-        local desc = Instance.new("TextLabel")
-        desc.Size = UDim2.new(1, -120, 0.4, 0)
-        desc.Position = UDim2.new(0, 12, 0.6, 0)
-        desc.BackgroundTransparency = 1
-        desc.Text = description
-        desc.TextColor3 = Color3.fromRGB(150, 150, 150)
-        desc.TextScaled = true
-        desc.Font = Enum.Font.Gotham
-        desc.TextXAlignment = Enum.TextXAlignment.Left
-        desc.Parent = container
-    end
-
-    local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0, 100, 0, 28)
-    button.Position = UDim2.new(1, -110, 0, 5)
-    button.BackgroundColor3 = defaultValue and COLORS.ok or COLORS.off
-    button.Text = defaultValue and "ENABLED" or "DISABLED"
-    button.TextColor3 = COLORS.text
-    button.TextScaled = true
-    button.Font = Enum.Font.GothamBold
-    button.Parent = container
-    local corner5 = Instance.new("UICorner", button)
-    corner5.CornerRadius = UDim.new(0, 8)
 
     local state = defaultValue
-    button.MouseButton1Click:Connect(function()
+    checkbox.MouseButton1Click:Connect(function()
         state = not state
-        button.BackgroundColor3 = state and COLORS.ok or COLORS.off
-        button.Text = state and "ENABLED" or "DISABLED"
+        checkbox.BackgroundColor3 = state and COLORS.success or COLORS.bgLight
+        checkbox.Text = state and "✓" or ""
         
-        local success, err = pcall(onChange, state)
+        local success = pcall(onChange, state)
         if not success then
-            warn("Toggle callback failed for '" .. labelText .. "': " .. tostring(err))
+            warn("Checkbox callback failed for '" .. labelText .. "'")
         end
     end)
 
@@ -621,117 +572,157 @@ end
 -- Section Header Factory
 local function createSectionHeader(text)
     local header = Instance.new("TextLabel")
-    header.Size = UDim2.new(1, -8, 0, 30)
-    header.BackgroundColor3 = COLORS.accent
+    header.Size = UDim2.new(1, -20, 0, 35)
+    header.BackgroundColor3 = COLORS.bgMid
     header.Text = text
     header.TextColor3 = COLORS.text
     header.TextScaled = true
     header.Font = Enum.Font.GothamBold
-    header.Parent = sectionScroll
-    local corner = Instance.new("UICorner", header)
-    corner.CornerRadius = UDim.new(0, 8)
+    header.Parent = contentFrame
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 6)
     return header
 end
 
--- GUI Controls erstellen
-createSectionHeader("🔧 General Settings")
-createToggle("Enable ESP", CONFIG.ENABLED, function(v) CONFIG.ENABLED = v end, "Master switch for all ESP features")
-addSpacer()
-
-createSectionHeader("👁️ Category Visibility")
-createToggle("Show Chests", CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end)
-createToggle("Show Items", CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end)
-createToggle("Show Resources", CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end)
-createToggle("Show Players", CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end)
-createToggle("Show NPCs", CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end)
-createToggle("Show Mobs", CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end)
-createToggle("Show Camps", CONFIG.SHOW_CAMPS, function(v) CONFIG.SHOW_CAMPS = v end)
-addSpacer()
-
-createSectionHeader("🏷️ Name Display Settings")
-createToggle("Chest Names", CONFIG.SHOW_CHEST_NAMES, function(v) CONFIG.SHOW_CHEST_NAMES = v end)
-createToggle("Item Names", CONFIG.SHOW_ITEM_NAMES, function(v) CONFIG.SHOW_ITEM_NAMES = v end)
-createToggle("Resource Names", CONFIG.SHOW_RESOURCE_NAMES, function(v) CONFIG.SHOW_RESOURCE_NAMES = v end)
-createToggle("Player Names", CONFIG.SHOW_PLAYER_NAMES, function(v) CONFIG.SHOW_PLAYER_NAMES = v end)
-createToggle("NPC Names", CONFIG.SHOW_NPC_NAMES, function(v) CONFIG.SHOW_NPC_NAMES = v end)
-createToggle("Mob Names", CONFIG.SHOW_MOB_NAMES, function(v) CONFIG.SHOW_MOB_NAMES = v end)
-createToggle("Camp Names", CONFIG.SHOW_CAMP_NAMES, function(v) CONFIG.SHOW_CAMP_NAMES = v end)
-addSpacer()
-
-createSectionHeader("🌸 Special Categories")
-createToggle("Show Flowers", CONFIG.SHOW_FLOWERS, function(v) CONFIG.SHOW_FLOWERS = v end)
-createToggle("Show Sticks", CONFIG.SHOW_STICKS, function(v) CONFIG.SHOW_STICKS = v end)
-addSpacer()
-
--- Teleport Buttons
-createSectionHeader("🚀 Teleport Features")
-
-tpToggleBtn = Instance.new("TextButton")
-tpToggleBtn.Size = UDim2.new(1, -8, 0, 38)
-tpToggleBtn.BackgroundColor3 = COLORS.accent
-tpToggleBtn.TextColor3 = COLORS.text
-tpToggleBtn.Text = "📦 Open Chest Teleport"
-tpToggleBtn.Font = Enum.Font.GothamBold
-tpToggleBtn.TextScaled = true
-tpToggleBtn.Parent = sectionScroll
-local corner6 = Instance.new("UICorner", tpToggleBtn)
-corner6.CornerRadius = UDim.new(0, 8)
-addSpacer(4)
-
-campToggleBtn = Instance.new("TextButton")
-campToggleBtn.Size = UDim2.new(1, -8, 0, 38)
-campToggleBtn.BackgroundColor3 = COLORS.accent
-campToggleBtn.TextColor3 = COLORS.text
-campToggleBtn.Text = "🔥 Open Camp Teleport"
-campToggleBtn.Font = Enum.Font.GothamBold
-campToggleBtn.TextScaled = true
-campToggleBtn.Parent = sectionScroll
-local corner7 = Instance.new("UICorner", campToggleBtn)
-corner7.CornerRadius = UDim.new(0, 8)
-addSpacer()
-
--- Uninject Section
-createSectionHeader("⚠️ Script Control")
-
-local uninjectContainer = Instance.new("Frame")
-uninjectContainer.Size = UDim2.new(1, -8, 0, 42)
-uninjectContainer.BackgroundColor3 = COLORS.bgMid
-uninjectContainer.Parent = sectionScroll
-local corner8 = Instance.new("UICorner", uninjectContainer)
-corner8.CornerRadius = UDim.new(0, 8)
-
-uninjectBtn = Instance.new("TextButton")
-uninjectBtn.Size = UDim2.new(1, -12, 1, -8)
-uninjectBtn.Position = UDim2.new(0, 6, 0, 4)
-uninjectBtn.BackgroundColor3 = COLORS.off
-uninjectBtn.TextColor3 = COLORS.text
-uninjectBtn.Text = "🗑️ Uninject Script"
-uninjectBtn.Font = Enum.Font.GothamBold
-uninjectBtn.TextScaled = true
-uninjectBtn.Parent = uninjectContainer
-local corner9 = Instance.new("UICorner", uninjectBtn)
-corner9.CornerRadius = UDim.new(0, 8)
-
--- Layout berechnen
-task.wait(0.1) -- Warten für korrekte AbsoluteSize-Werte
-do
-    local yOffset = 0
-    for _, child in ipairs(sectionScroll:GetChildren()) do
-        if child:IsA("GuiObject") then
-            child.Position = UDim2.new(0, 0, 0, yOffset)
-            yOffset = yOffset + child.AbsoluteSize.Y + CONSTANTS.LAYOUT_SPACING
-        end
+-- Horizontal Layout Helper
+local function createHorizontalSection(items, columns)
+    columns = columns or 2
+    local yStart = 0
+    
+    for i, item in ipairs(items) do
+        local column = ((i - 1) % columns)
+        local row = math.floor((i - 1) / columns)
+        
+        item.Position = UDim2.new(column / columns, 5, 0, yStart + (row * 35))
     end
-    sectionScroll.CanvasSize = UDim2.new(0, 0, 0, yOffset + 20)
+    
+    local totalRows = math.ceil(#items / columns)
+    return totalRows * 35 + 10
 end
 
--- Collapse Funktionalität
+-- Spacer Helper
+local function addSpacer(height)
+    local spacer = Instance.new("Frame")
+    spacer.Size = UDim2.new(1, 0, 0, height or 10)
+    spacer.BackgroundTransparency = 1
+    spacer.Parent = contentFrame
+end
+
+-- Create GUI Content
+local yOffset = 0
+
+-- Main Toggle
+local mainHeader = createSectionHeader("Main Settings")
+mainHeader.Position = UDim2.new(0, 0, 0, yOffset)
+yOffset = yOffset + 45
+
+local mainToggle = createCheckbox("Enable ESP", CONFIG.ENABLED, function(v) CONFIG.ENABLED = v end)
+mainToggle.Position = UDim2.new(0, 10, 0, yOffset)
+mainToggle.Size = UDim2.new(1, -20, 0, 28)
+yOffset = yOffset + 38
+
+-- Category Visibility Section
+local categoryHeader = createSectionHeader("Category Visibility")
+categoryHeader.Position = UDim2.new(0, 0, 0, yOffset)
+yOffset = yOffset + 45
+
+local categoryCheckboxes = {
+    createCheckbox("Chests", CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end),
+    createCheckbox("Items", CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end),
+    createCheckbox("Resources", CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end),
+    createCheckbox("Players", CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end),
+    createCheckbox("NPCs", CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end),
+    createCheckbox("Mobs", CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end),
+    createCheckbox("Camps", CONFIG.SHOW_CAMPS, function(v) CONFIG.SHOW_CAMPS = v end),
+    createCheckbox("Flowers", CONFIG.SHOW_FLOWERS, function(v) CONFIG.SHOW_FLOWERS = v end),
+    createCheckbox("Sticks", CONFIG.SHOW_STICKS, function(v) CONFIG.SHOW_STICKS = v end),
+}
+
+for i, checkbox in ipairs(categoryCheckboxes) do
+    local column = ((i - 1) % 2)
+    local row = math.floor((i - 1) / 2)
+    checkbox.Position = UDim2.new(column * 0.5, 10, 0, yOffset + (row * 35))
+end
+yOffset = yOffset + (math.ceil(#categoryCheckboxes / 2) * 35) + 15
+
+-- Name Display Section  
+local nameHeader = createSectionHeader("Name Display")
+nameHeader.Position = UDim2.new(0, 0, 0, yOffset)
+yOffset = yOffset + 45
+
+local nameCheckboxes = {
+    createCheckbox("Chest Names", CONFIG.SHOW_CHEST_NAMES, function(v) CONFIG.SHOW_CHEST_NAMES = v end),
+    createCheckbox("Item Names", CONFIG.SHOW_ITEM_NAMES, function(v) CONFIG.SHOW_ITEM_NAMES = v end),
+    createCheckbox("Resource Names", CONFIG.SHOW_RESOURCE_NAMES, function(v) CONFIG.SHOW_RESOURCE_NAMES = v end),
+    createCheckbox("Player Names", CONFIG.SHOW_PLAYER_NAMES, function(v) CONFIG.SHOW_PLAYER_NAMES = v end),
+    createCheckbox("NPC Names", CONFIG.SHOW_NPC_NAMES, function(v) CONFIG.SHOW_NPC_NAMES = v end),
+    createCheckbox("Mob Names", CONFIG.SHOW_MOB_NAMES, function(v) CONFIG.SHOW_MOB_NAMES = v end),
+    createCheckbox("Camp Names", CONFIG.SHOW_CAMP_NAMES, function(v) CONFIG.SHOW_CAMP_NAMES = v end),
+}
+
+for i, checkbox in ipairs(nameCheckboxes) do
+    local column = ((i - 1) % 2)
+    local row = math.floor((i - 1) / 2)
+    checkbox.Position = UDim2.new(column * 0.5, 10, 0, yOffset + (row * 35))
+end
+yOffset = yOffset + (math.ceil(#nameCheckboxes / 2) * 35) + 15
+
+-- Teleport Section
+local teleportHeader = createSectionHeader("Teleport Features")
+teleportHeader.Position = UDim2.new(0, 0, 0, yOffset)
+yOffset = yOffset + 45
+
+local chestTpBtn = Instance.new("TextButton")
+chestTpBtn.Size = UDim2.new(0, 185, 0, 35)
+chestTpBtn.Position = UDim2.new(0, 10, 0, yOffset)
+chestTpBtn.BackgroundColor3 = COLORS.accent
+chestTpBtn.TextColor3 = COLORS.text
+chestTpBtn.Text = "Chest Teleport"
+chestTpBtn.Font = Enum.Font.GothamSemibold
+chestTpBtn.TextScaled = true
+chestTpBtn.Parent = contentFrame
+Instance.new("UICorner", chestTpBtn).CornerRadius = UDim.new(0, 8)
+
+local campTpBtn = Instance.new("TextButton")
+campTpBtn.Size = UDim2.new(0, 185, 0, 35)
+campTpBtn.Position = UDim2.new(0, 205, 0, yOffset)
+campTpBtn.BackgroundColor3 = COLORS.accent
+campTpBtn.TextColor3 = COLORS.text
+campTpBtn.Text = "Camp Teleport"
+campTpBtn.Font = Enum.Font.GothamSemibold
+campTpBtn.TextScaled = true
+campTpBtn.Parent = contentFrame
+Instance.new("UICorner", campTpBtn).CornerRadius = UDim.new(0, 8)
+
+yOffset = yOffset + 50
+
+-- Uninject Section
+local uninjectHeader = createSectionHeader("Script Control")
+uninjectHeader.Position = UDim2.new(0, 0, 0, yOffset)
+yOffset = yOffset + 45
+
+local uninjectBtn = Instance.new("TextButton")
+uninjectBtn.Size = UDim2.new(1, -20, 0, 40)
+uninjectBtn.Position = UDim2.new(0, 10, 0, yOffset)
+uninjectBtn.BackgroundColor3 = COLORS.danger
+uninjectBtn.TextColor3 = COLORS.text
+uninjectBtn.Text = "Uninject Script"
+uninjectBtn.Font = Enum.Font.GothamBold
+uninjectBtn.TextScaled = true
+uninjectBtn.Parent = contentFrame
+Instance.new("UICorner", uninjectBtn).CornerRadius = UDim.new(0, 8)
+
+yOffset = yOffset + 55
+
+-- Set canvas size
+contentFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
+
+-- Collapse functionality
 local function setCollapsed(isCollapsed)
     collapsed = isCollapsed
     collapseBtn.Text = isCollapsed and "Show" or "Hide"
-    local targetSize = isCollapsed and UDim2.fromOffset(380, 60) or UDim2.fromOffset(380, 650)
+    local targetSize = isCollapsed and UDim2.fromOffset(400, 55) or UDim2.fromOffset(400, 500)
     
-    local tween = TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {Size = targetSize})
+    local tween = TweenService:Create(mainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Size = targetSize})
     tween:Play()
 end
 
@@ -744,30 +735,28 @@ rootDockBtn.MouseButton1Click:Connect(function()
 end)
 
 --=============================
--- GEFIXT: Chest Teleport Window
+-- Chest Teleport Window
 --=============================
 
 tpFrame = Instance.new("Frame")
-tpFrame.Size = UDim2.fromOffset(300, 400)
-tpFrame.Position = UDim2.fromOffset(420, 60)
+tpFrame.Size = UDim2.fromOffset(320, 400)
+tpFrame.Position = UDim2.fromOffset(440, 60)
 tpFrame.BackgroundColor3 = COLORS.bgDark
 tpFrame.Visible = false
 tpFrame.Parent = screenGui
-local corner10 = Instance.new("UICorner", tpFrame)
-corner10.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", tpFrame).CornerRadius = UDim.new(0, 12)
 
 local tpHeader = Instance.new("Frame")
-tpHeader.Size = UDim2.new(1, 0, 0, 50)
+tpHeader.Size = UDim2.new(1, 0, 0, 45)
 tpHeader.BackgroundColor3 = COLORS.bgMid
 tpHeader.Parent = tpFrame
-local corner11 = Instance.new("UICorner", tpHeader)
-corner11.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", tpHeader).CornerRadius = UDim.new(0, 12)
 
 local tpTitle = Instance.new("TextLabel")
 tpTitle.Size = UDim2.new(1, -20, 1, 0)
-tpTitle.Position = UDim2.new(0, 10, 0, 0)
+tpTitle.Position = UDim2.new(0, 15, 0, 0)
 tpTitle.BackgroundTransparency = 1
-tpTitle.Text = "📦 Chest Teleport"
+tpTitle.Text = "Chest Teleport"
 tpTitle.TextColor3 = COLORS.text
 tpTitle.TextScaled = true
 tpTitle.Font = Enum.Font.GothamBold
@@ -775,9 +764,9 @@ tpTitle.TextXAlignment = Enum.TextXAlignment.Left
 tpTitle.Parent = tpHeader
 
 tpList = Instance.new("ScrollingFrame")
-tpList.Size = UDim2.new(1, -20, 1, -70)
-tpList.Position = UDim2.new(0, 10, 0, 60)
-tpList.ScrollBarThickness = 8
+tpList.Size = UDim2.new(1, -20, 1, -65)
+tpList.Position = UDim2.new(0, 10, 0, 55)
+tpList.ScrollBarThickness = 6
 tpList.ScrollBarImageColor3 = COLORS.accent
 tpList.BackgroundTransparency = 1
 tpList.Parent = tpFrame
@@ -785,8 +774,7 @@ tpList.Parent = tpFrame
 local function refreshTpList()
     if not tpList or destroyed then return end
     
-    local success, err = pcall(function()
-        -- Liste leeren
+    local success = pcall(function()
         for _, child in ipairs(tpList:GetChildren()) do
             if child:IsA("GuiObject") then
                 child:Destroy()
@@ -796,7 +784,6 @@ local function refreshTpList()
         local yOffset = 0
         local chestCount = 0
         
-        -- Alle Chests durchgehen
         for obj, data in pairs(objectData) do
             if data.category == "CHEST" and obj and obj.Parent then
                 chestCount = chestCount + 1
@@ -804,11 +791,10 @@ local function refreshTpList()
                 local btn = Instance.new("TextButton")
                 btn.Size = UDim2.new(1, -8, 0, 35)
                 btn.Position = UDim2.new(0, 4, 0, yOffset)
-                btn.BackgroundColor3 = COLORS.accent
+                btn.BackgroundColor3 = COLORS.bgMid
                 btn.TextColor3 = COLORS.text
                 
-                -- Distance berechnen
-                local distance = "???"
+                local distance = "Unknown"
                 local char = localPlayer.Character
                 if char and char:FindFirstChild("HumanoidRootPart") then
                     local mainPart = getMainPart(obj)
@@ -819,37 +805,30 @@ local function refreshTpList()
                 end
                 
                 btn.Text = string.format("%s - %s", data.label and data.label.Text or "Chest", distance)
-                btn.Font = Enum.Font.GothamMedium
+                btn.Font = Enum.Font.GothamSemibold
                 btn.TextScaled = true
                 btn.Parent = tpList
-                local corner12 = Instance.new("UICorner", btn)
-                corner12.CornerRadius = UDim.new(0, 8)
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
-                -- Teleport Funktionalität
                 btn.MouseButton1Click:Connect(function()
                     local character = localPlayer.Character
                     local root = character and character:FindFirstChild("HumanoidRootPart")
                     local targetPart = getMainPart(obj)
                     
                     if root and targetPart then
-                        print("Teleporting to chest: " .. (data.label and data.label.Text or "Unknown"))
                         local success = stepTeleport(root, targetPart.Position)
                         if success then
                             tpFrame.Visible = false
-                            -- Erfolgs-Feedback
-                            btn.BackgroundColor3 = COLORS.ok
+                            btn.BackgroundColor3 = COLORS.success
                             btn.Text = "✓ Teleported!"
                             task.wait(0.5)
-                            btn.BackgroundColor3 = COLORS.accent
+                            btn.BackgroundColor3 = COLORS.bgMid
                         else
-                            -- Fehler-Feedback
-                            btn.BackgroundColor3 = COLORS.off
+                            btn.BackgroundColor3 = COLORS.danger
                             btn.Text = "✗ Failed!"
                             task.wait(1)
-                            btn.BackgroundColor3 = COLORS.accent
+                            btn.BackgroundColor3 = COLORS.bgMid
                         end
-                    else
-                        warn("Cannot teleport: Missing player or target")
                     end
                 end)
 
@@ -863,9 +842,9 @@ local function refreshTpList()
             noChestsLabel.Position = UDim2.new(0, 4, 0, 10)
             noChestsLabel.BackgroundTransparency = 1
             noChestsLabel.Text = "No chests found"
-            noChestsLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+            noChestsLabel.TextColor3 = COLORS.textSub
             noChestsLabel.TextScaled = true
-            noChestsLabel.Font = Enum.Font.GothamMedium
+            noChestsLabel.Font = Enum.Font.Gotham
             noChestsLabel.Parent = tpList
             yOffset = 50
         end
@@ -874,11 +853,11 @@ local function refreshTpList()
     end)
     
     if not success then
-        warn("refreshTpList failed: " .. tostring(err))
+        warn("refreshTpList failed")
     end
 end
 
-tpToggleBtn.MouseButton1Click:Connect(function()
+chestTpBtn.MouseButton1Click:Connect(function()
     tpFrame.Visible = not tpFrame.Visible
     if tpFrame.Visible then 
         debouncedCall("refreshTpList", refreshTpList, 0.1)
@@ -886,30 +865,28 @@ tpToggleBtn.MouseButton1Click:Connect(function()
 end)
 
 --=============================
--- GEFIXT: Camp Teleport Window
+-- Camp Teleport Window
 --=============================
 
 campFrame = Instance.new("Frame")
-campFrame.Size = UDim2.fromOffset(300, 400)
-campFrame.Position = UDim2.fromOffset(420, 480)
+campFrame.Size = UDim2.fromOffset(320, 400)
+campFrame.Position = UDim2.fromOffset(440, 480)
 campFrame.BackgroundColor3 = COLORS.bgDark
 campFrame.Visible = false
 campFrame.Parent = screenGui
-local corner13 = Instance.new("UICorner", campFrame)
-corner13.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", campFrame).CornerRadius = UDim.new(0, 12)
 
 local campHeader = Instance.new("Frame")
-campHeader.Size = UDim2.new(1, 0, 0, 50)
+campHeader.Size = UDim2.new(1, 0, 0, 45)
 campHeader.BackgroundColor3 = COLORS.bgMid
 campHeader.Parent = campFrame
-local corner14 = Instance.new("UICorner", campHeader)
-corner14.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", campHeader).CornerRadius = UDim.new(0, 12)
 
 local campTitle = Instance.new("TextLabel")
 campTitle.Size = UDim2.new(1, -20, 1, 0)
-campTitle.Position = UDim2.new(0, 10, 0, 0)
+campTitle.Position = UDim2.new(0, 15, 0, 0)
 campTitle.BackgroundTransparency = 1
-campTitle.Text = "🔥 Camp Teleport"
+campTitle.Text = "Camp Teleport"
 campTitle.TextColor3 = COLORS.text
 campTitle.TextScaled = true
 campTitle.Font = Enum.Font.GothamBold
@@ -917,9 +894,9 @@ campTitle.TextXAlignment = Enum.TextXAlignment.Left
 campTitle.Parent = campHeader
 
 campList = Instance.new("ScrollingFrame")
-campList.Size = UDim2.new(1, -20, 1, -70)
-campList.Position = UDim2.new(0, 10, 0, 60)
-campList.ScrollBarThickness = 8
+campList.Size = UDim2.new(1, -20, 1, -65)
+campList.Position = UDim2.new(0, 10, 0, 55)
+campList.ScrollBarThickness = 6
 campList.ScrollBarImageColor3 = COLORS.accent
 campList.BackgroundTransparency = 1
 campList.Parent = campFrame
@@ -927,8 +904,7 @@ campList.Parent = campFrame
 local function refreshCampList()
     if not campList or destroyed then return end
     
-    local success, err = pcall(function()
-        -- Liste leeren
+    local success = pcall(function()
         for _, child in ipairs(campList:GetChildren()) do
             if child:IsA("GuiObject") then
                 child:Destroy()
@@ -938,7 +914,6 @@ local function refreshCampList()
         local yOffset = 0
         local campCount = 0
         
-        -- Alle Camps durchgehen
         for obj, data in pairs(objectData) do
             if data.category == "CAMP" and obj and obj.Parent then
                 campCount = campCount + 1
@@ -946,11 +921,10 @@ local function refreshCampList()
                 local btn = Instance.new("TextButton")
                 btn.Size = UDim2.new(1, -8, 0, 35)
                 btn.Position = UDim2.new(0, 4, 0, yOffset)
-                btn.BackgroundColor3 = COLORS.accent
+                btn.BackgroundColor3 = COLORS.bgMid
                 btn.TextColor3 = COLORS.text
                 
-                -- Distance berechnen
-                local distance = "???"
+                local distance = "Unknown"
                 local char = localPlayer.Character
                 if char and char:FindFirstChild("HumanoidRootPart") then
                     local mainPart = getMainPart(obj)
@@ -961,37 +935,30 @@ local function refreshCampList()
                 end
                 
                 btn.Text = string.format("%s - %s", data.label and data.label.Text or "Camp", distance)
-                btn.Font = Enum.Font.GothamMedium
+                btn.Font = Enum.Font.GothamSemibold
                 btn.TextScaled = true
                 btn.Parent = campList
-                local corner15 = Instance.new("UICorner", btn)
-                corner15.CornerRadius = UDim.new(0, 8)
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
-                -- Teleport Funktionalität
                 btn.MouseButton1Click:Connect(function()
                     local character = localPlayer.Character
                     local root = character and character:FindFirstChild("HumanoidRootPart")
                     local targetPart = getMainPart(obj)
                     
                     if root and targetPart then
-                        print("Teleporting to camp: " .. (data.label and data.label.Text or "Unknown"))
                         local success = stepTeleport(root, targetPart.Position)
                         if success then
                             campFrame.Visible = false
-                            -- Erfolgs-Feedback
-                            btn.BackgroundColor3 = COLORS.ok
+                            btn.BackgroundColor3 = COLORS.success
                             btn.Text = "✓ Teleported!"
                             task.wait(0.5)
-                            btn.BackgroundColor3 = COLORS.accent
+                            btn.BackgroundColor3 = COLORS.bgMid
                         else
-                            -- Fehler-Feedback
-                            btn.BackgroundColor3 = COLORS.off
+                            btn.BackgroundColor3 = COLORS.danger
                             btn.Text = "✗ Failed!"
                             task.wait(1)
-                            btn.BackgroundColor3 = COLORS.accent
+                            btn.BackgroundColor3 = COLORS.bgMid
                         end
-                    else
-                        warn("Cannot teleport: Missing player or target")
                     end
                 end)
 
@@ -1005,9 +972,9 @@ local function refreshCampList()
             noCampsLabel.Position = UDim2.new(0, 4, 0, 10)
             noCampsLabel.BackgroundTransparency = 1
             noCampsLabel.Text = "No camps found"
-            noCampsLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+            noCampsLabel.TextColor3 = COLORS.textSub
             noCampsLabel.TextScaled = true
-            noCampsLabel.Font = Enum.Font.GothamMedium
+            noCampsLabel.Font = Enum.Font.Gotham
             noCampsLabel.Parent = campList
             yOffset = 50
         end
@@ -1016,18 +983,18 @@ local function refreshCampList()
     end)
     
     if not success then
-        warn("refreshCampList failed: " .. tostring(err))
+        warn("refreshCampList failed")
     end
 end
 
-campToggleBtn.MouseButton1Click:Connect(function()
+campTpBtn.MouseButton1Click:Connect(function()
     campFrame.Visible = not campFrame.Visible
     if campFrame.Visible then 
         debouncedCall("refreshCampList", refreshCampList, 0.1)
     end
 end)
 
--- GEFIXT: Throttled Updates für beide Listen
+-- Auto-refresh teleport lists
 table.insert(connections, RunService.Stepped:Connect(function()
     local now = tick()
     
@@ -1043,107 +1010,83 @@ table.insert(connections, RunService.Stepped:Connect(function()
 end))
 
 --=============================
--- GEFIXT: Verbessertes Uninject System
+-- Uninject System
 --=============================
 
 local function uninject()
     if destroyed then return end
     destroyed = true
 
-    print("Starting ESP uninject process...")
+    print("Uninject process started...")
 
-    -- Connections trennen
     for i, connection in ipairs(connections) do
         if typeof(connection) == "RBXScriptConnection" then
-            local success, err = pcall(function() 
-                connection:Disconnect() 
-            end)
-            if not success then
-                warn("Failed to disconnect connection " .. i .. ": " .. tostring(err))
-            end
+            pcall(function() connection:Disconnect() end)
         end
     end
     connections = {}
 
-    -- ESP Objects cleanup
     local cleanupCount = 0
     for obj, data in pairs(objectData) do
-        local success, err = pcall(function()
+        pcall(function()
             if data.billboard and data.billboard.Parent then 
                 data.billboard:Destroy() 
                 cleanupCount = cleanupCount + 1
             end
         end)
-        if not success then
-            warn("Failed to clean ESP for object: " .. tostring(err))
-        end
     end
-    print("Cleaned up " .. cleanupCount .. " ESP objects")
-
-    -- Reset state
+    
     objectData = {}
     chestIdByObject = setmetatable({}, {__mode="k"})
     campIdByObject = setmetatable({}, {__mode="k"})
     chestCounter, campCounter = 0, 0
 
-    -- GUI cleanup
     if screenGui and screenGui.Parent then 
-        local success, err = pcall(function() 
-            screenGui:Destroy() 
-        end)
-        if not success then
-            warn("Failed to destroy GUI: " .. tostring(err))
-        else
-            print("GUI destroyed successfully")
-        end
+        pcall(function() screenGui:Destroy() end)
     end
     
-    print("✓ ESP/Utility Suite uninject complete!")
+    print("✓ Noctis Utility uninject complete! Cleaned " .. cleanupCount .. " ESP objects.")
 end
 
 uninjectBtn.MouseButton1Click:Connect(function()
-    -- Confirmation dialog
     local confirmFrame = Instance.new("Frame")
-    confirmFrame.Size = UDim2.fromOffset(300, 120)
-    confirmFrame.Position = UDim2.new(0.5, -150, 0.5, -60)
+    confirmFrame.Size = UDim2.fromOffset(280, 120)
+    confirmFrame.Position = UDim2.new(0.5, -140, 0.5, -60)
     confirmFrame.BackgroundColor3 = COLORS.bgDark
     confirmFrame.Parent = screenGui
-    local corner16 = Instance.new("UICorner", confirmFrame)
-    corner16.CornerRadius = UDim.new(0, 12)
+    Instance.new("UICorner", confirmFrame).CornerRadius = UDim.new(0, 12)
     
     local confirmText = Instance.new("TextLabel")
-    confirmText.Size = UDim2.new(1, -20, 0, 40)
+    confirmText.Size = UDim2.new(1, -20, 0, 35)
     confirmText.Position = UDim2.new(0, 10, 0, 10)
     confirmText.BackgroundTransparency = 1
-    confirmText.Text = "Are you sure you want to uninject?"
+    confirmText.Text = "Remove Noctis Utility?"
     confirmText.TextColor3 = COLORS.text
     confirmText.TextScaled = true
-    confirmText.Font = Enum.Font.GothamMedium
+    confirmText.Font = Enum.Font.GothamSemibold
     confirmText.Parent = confirmFrame
     
     local yesBtn = Instance.new("TextButton")
     yesBtn.Size = UDim2.fromOffset(80, 30)
-    yesBtn.Position = UDim2.new(0, 50, 0, 70)
-    yesBtn.BackgroundColor3 = COLORS.off
+    yesBtn.Position = UDim2.new(0, 40, 0, 70)
+    yesBtn.BackgroundColor3 = COLORS.danger
     yesBtn.TextColor3 = COLORS.text
     yesBtn.Text = "Yes"
     yesBtn.TextScaled = true
     yesBtn.Font = Enum.Font.GothamBold
     yesBtn.Parent = confirmFrame
-    local corner17 = Instance.new("UICorner", yesBtn)
-    corner17.CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", yesBtn).CornerRadius = UDim.new(0, 6)
     
     local noBtn = Instance.new("TextButton")
     noBtn.Size = UDim2.fromOffset(80, 30)
-    noBtn.Position = UDim2.new(0, 170, 0, 70)
-    noBtn.BackgroundColor3 = COLORS.ok
+    noBtn.Position = UDim2.new(0, 160, 0, 70)
+    noBtn.BackgroundColor3 = COLORS.success
     noBtn.TextColor3 = COLORS.text
     noBtn.Text = "No"
     noBtn.TextScaled = true
     noBtn.Font = Enum.Font.GothamBold
     noBtn.Parent = confirmFrame
-    local corner18 = Instance.new("UICorner", noBtn)
-    corner18.CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 6)
     
     yesBtn.MouseButton1Click:Connect(function()
         confirmFrame:Destroy()
@@ -1156,74 +1099,52 @@ uninjectBtn.MouseButton1Click:Connect(function()
 end)
 
 --=============================
--- Intro Animation mit verbessertem Design
+-- Simple Intro Animation
 --=============================
 
 do
-    local success, err = pcall(function()
+    local success = pcall(function()
         local intro = Instance.new("Frame")
-        intro.Size = UDim2.new(0.6, 0, 0.2, 0)
-        intro.Position = UDim2.new(0.2, 0, 0.35, 0)
+        intro.Size = UDim2.new(0.4, 0, 0.15, 0)
+        intro.Position = UDim2.new(0.3, 0, 0.4, 0)
         intro.BackgroundColor3 = COLORS.bgMid
         intro.Parent = screenGui
-        local corner19 = Instance.new("UICorner", intro)
-        corner19.CornerRadius = UDim.new(0, 15)
+        Instance.new("UICorner", intro).CornerRadius = UDim.new(0, 12)
         
-        local introTitle = Instance.new("TextLabel")
-        introTitle.Size = UDim2.new(1, -20, 0.6, 0)
-        introTitle.Position = UDim2.new(0, 10, 0, 10)
-        introTitle.BackgroundTransparency = 1
-        introTitle.Text = "ESP/Utility Suite - IMPROVED"
-        introTitle.TextColor3 = COLORS.accent
-        introTitle.TextScaled = true
-        introTitle.Font = Enum.Font.GothamBold
-        introTitle.Parent = intro
-        
-        local introDesc = Instance.new("TextLabel")
-        introDesc.Size = UDim2.new(1, -20, 0.4, 0)
-        introDesc.Position = UDim2.new(0, 10, 0.6, 0)
-        introDesc.BackgroundTransparency = 1
-        introDesc.Text = "Made by w3lk and mosty | Fixed by AI Assistant"
-        introDesc.TextColor3 = COLORS.text
-        introDesc.TextScaled = true
-        introDesc.Font = Enum.Font.GothamMedium
-        introDesc.Parent = intro
+        local introText = Instance.new("TextLabel")
+        introText.Size = UDim2.new(1, -20, 1, 0)
+        introText.Position = UDim2.new(0, 10, 0, 0)
+        introText.BackgroundTransparency = 1
+        introText.Text = "made by mosty&w3lk"
+        introText.TextColor3 = COLORS.text
+        introText.TextScaled = true
+        introText.Font = Enum.Font.GothamBold
+        introText.Parent = intro
 
-        -- Fade Animation
         intro.BackgroundTransparency = 1
-        introTitle.TextTransparency = 1
-        introDesc.TextTransparency = 1
+        introText.TextTransparency = 1
         
-        local fadeIn = TweenService:Create(intro, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
+        local fadeIn = TweenService:Create(intro, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {
             BackgroundTransparency = 0.1
         })
-        local titleFade = TweenService:Create(introTitle, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
-            TextTransparency = 0
-        })
-        local descFade = TweenService:Create(introDesc, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
+        local textFade = TweenService:Create(introText, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {
             TextTransparency = 0
         })
         
         fadeIn:Play()
-        titleFade:Play()
-        descFade:Play()
+        textFade:Play()
 
-        -- Auto-hide nach 3 Sekunden
-        task.delay(3, function()
+        task.delay(2.5, function()
             if intro and intro.Parent then
-                local fadeOut = TweenService:Create(intro, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
+                local fadeOut = TweenService:Create(intro, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {
                     BackgroundTransparency = 1
                 })
-                local titleFadeOut = TweenService:Create(introTitle, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
-                    TextTransparency = 1
-                })
-                local descFadeOut = TweenService:Create(introDesc, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {
+                local textFadeOut = TweenService:Create(introText, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {
                     TextTransparency = 1
                 })
                 
                 fadeOut:Play()
-                titleFadeOut:Play()
-                descFadeOut:Play()
+                textFadeOut:Play()
                 
                 fadeOut.Completed:Connect(function()
                     if intro and intro.Parent then
@@ -1235,34 +1156,25 @@ do
     end)
     
     if not success then
-        warn("Intro animation failed: " .. tostring(err))
+        warn("Intro animation failed")
     end
 end
 
--- Final Status Report
-print("🎉 ESP / Utility Suite IMPROVED VERSION loaded successfully!")
-print("✅ Camp Teleport functionality FIXED")
-print("✅ Individual name toggles IMPLEMENTED") 
-print("✅ ESP labels now move with entities")
-print("✅ Performance optimizations APPLIED")
-print("✅ Better error handling ADDED")
-print("✅ Enhanced GUI design")
-print("✅ Distance display in teleport lists")
-print("✅ Confirmation dialog for uninject")
+-- Final Status
+print("🌙 Noctis Utility loaded successfully!")
+print("✅ Clean checkbox GUI design")
+print("✅ Fixed flower detection (no longer chests)")
+print("✅ English menu interface")
+print("✅ Horizontal checkbox layout")
+print("✅ Working chest & camp teleportation")
+print("✅ Individual name toggles")
+print("✅ ESP labels follow entities")
 print("")
-print("🔧 Features:")
-print("   - Individual visibility controls for each category")
-print("   - Separate name display toggles")
-print("   - Working chest & camp teleportation")
-print("   - Distance calculation")
-print("   - Improved object detection")
-print("   - Better performance with throttled updates")
-print("")
-print("📋 Usage:")
-print("   - Use the ESP Menu button to open/close")
-print("   - Toggle categories and names independently") 
-print("   - Open teleport windows to see available targets")
-print("   - Click on targets to teleport (step-teleport for anti-cheat)")
-print("   - Use uninject button to safely remove the script")
+print("🎮 Features:")
+print("   • Clean modern GUI with checkboxes")
+print("   • Proper category detection")
+print("   • Distance-based teleportation")
+print("   • Individual visibility controls")
+print("   • Performance optimized")
 print("")
 print("⚡ Ready to use!")
