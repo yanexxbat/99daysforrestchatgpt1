@@ -1,0 +1,422 @@
+-- === ESP Detector Script (Flowers = Resources) ===
+-- Chests -> "Chest 1, Chest 2..."
+-- Flowers -> treated as Resource (blue, real name)
+-- Full GUI + Chest Teleport + Uninject
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local CAMP_POSITION = Vector3.new(0,5,0)
+
+local CONFIG = {
+    ENABLED = true,
+    SHOW_CHESTS = true,
+    SHOW_ITEMS = true,
+    SHOW_RESOURCES = true,
+    SHOW_PLAYERS = true,
+    SHOW_NPCS = true,
+    SHOW_MOBS = true,
+    MAX_DISPLAY_DISTANCE = 500,
+}
+
+-- === STORAGE ===
+local objectData = {}
+local chestCounter = 0
+local connections = {}
+local screenGui
+local tpFrame
+local tpList
+
+-- === TARGETS ===
+local TARGETS = {
+    CHEST = {"chest","box","crate","container","loot","lootbox"},
+    ITEM = {"axe","sword","bow","key","potion","food","bread","meat","bandage"},
+    RESOURCE = {"wood","stone","ore","coal"},
+    NPC = {"alien","cultist","npc","villager","soldier","guard"},
+    MOB = {"wolf","bear","rat","spider","skeleton","zombie","mob"}
+}
+
+-- === COLORS ===
+local function getItemColor(name, category)
+    local n = name:lower()
+    if category == "CHEST" then return Color3.new(1,0.85,0) end
+    if category == "RESOURCE" then return Color3.new(0.6,0.7,1) end
+    if category == "NPC" then return Color3.new(0.2,1,0.2) end
+    if category == "MOB" then return Color3.new(1,0,0) end
+    if category == "PLAYER" then return Color3.new(0,1,1) end
+    if n:find("sword") then return Color3.new(1,0.3,0.3) end
+    if n:find("bow") then return Color3.new(1,0.6,0.2) end
+    if n:find("axe") then return Color3.new(0.3,1,0.3) end
+    if n:find("potion") or n:find("food") or n:find("meat") or n:find("bread") then
+        return Color3.new(1,0.4,0.8)
+    end
+    return Color3.new(1,1,1)
+end
+
+-- === CATEGORY DETECTION ===
+local function getCategory(obj)
+    local n = obj.Name:lower()
+
+    -- ✅ flowers = resources
+    if n:find("flower") or n:find("blume") then
+        return "RESOURCE"
+    end
+
+    for _, v in ipairs(TARGETS.CHEST) do if n:find(v) then return "CHEST" end end
+    for _, v in ipairs(TARGETS.ITEM) do if n:find(v) then return "ITEM" end end
+    for _, v in ipairs(TARGETS.RESOURCE) do if n:find(v) then return "RESOURCE" end end
+    for _, v in ipairs(TARGETS.NPC) do if n:find(v) then return "NPC" end end
+    for _, v in ipairs(TARGETS.MOB) do if n:find(v) then return "MOB" end end
+    if Players:GetPlayerFromCharacter(obj) then return "PLAYER" end
+    if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then return "ITEM" end
+    return nil
+end
+
+-- === MAIN PART DETECTION ===
+local function getMainPart(obj)
+    if obj:IsA("Model") then
+        if obj.PrimaryPart then return obj.PrimaryPart end
+        if obj:FindFirstChild("HumanoidRootPart") then return obj.HumanoidRootPart end
+        if obj:FindFirstChild("Handle") then return obj.Handle end
+        for _, part in ipairs(obj:GetChildren()) do
+            if part:IsA("BasePart") then return part end
+        end
+    elseif obj:IsA("BasePart") then
+        return obj
+    end
+    return nil
+end
+
+-- === ESP CREATION ===
+local function createESP(obj, category)
+    local mainPart = getMainPart(obj)
+    if not mainPart then return end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0,160,0,40)
+    billboard.StudsOffset = Vector3.new(0,3,0)
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = CONFIG.MAX_DISPLAY_DISTANCE
+    billboard.Adornee = mainPart
+    billboard.Parent = mainPart
+
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.new(1,0,1,0)
+    text.BackgroundTransparency = 1
+    text.TextScaled = true
+    text.Font = Enum.Font.GothamBold
+    text.TextStrokeTransparency = 0
+    text.TextStrokeColor3 = Color3.new(0,0,0)
+    text.TextColor3 = getItemColor(obj.Name, category)
+    text.Parent = billboard
+
+    if category == "CHEST" then
+        chestCounter += 1
+        text.Text = "Chest " .. chestCounter
+    elseif category == "PLAYER" then
+        local plr = Players:GetPlayerFromCharacter(obj)
+        text.Text = plr and plr.Name or "Player"
+    else
+        text.Text = obj.Name
+    end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillTransparency = 1
+    highlight.OutlineTransparency = 0
+    highlight.OutlineColor = getItemColor(obj.Name, category)
+    highlight.Adornee = mainPart
+    highlight.Parent = mainPart
+
+    objectData[obj] = {billboard = billboard, text = text, highlight = highlight, category = category}
+end
+
+local function removeESP(obj)
+    if objectData[obj] then
+        objectData[obj].billboard:Destroy()
+        objectData[obj].highlight:Destroy()
+        objectData[obj] = nil
+    end
+end
+
+-- === TP LIST UPDATE ===
+local function updateTpList()
+    if not tpList then return end
+    tpList:ClearAllChildren()
+    local y = 0
+    for obj, data in pairs(objectData) do
+        if data.category == "CHEST" then
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1,-5,0,25)
+            btn.Position = UDim2.new(0,0,0,y)
+            btn.BackgroundColor3 = Color3.fromRGB(50,50,50)
+            btn.TextColor3 = Color3.new(1,0.85,0)
+            btn.TextScaled = true
+            btn.Font = Enum.Font.Gotham
+            btn.Text = data.text.Text
+            btn.Parent = tpList
+            y += 30
+
+            btn.MouseButton1Click:Connect(function()
+                local char = player.Character
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    local root = char.HumanoidRootPart
+                    local mainPart = getMainPart(obj)
+                    if mainPart then
+                        local tween = TweenService:Create(root, TweenInfo.new(1, Enum.EasingStyle.Quad), {CFrame = CFrame.new(mainPart.Position + Vector3.new(0,5,0))})
+                        tween:Play()
+                        tpFrame.Visible = false
+                    end
+                end
+            end)
+        end
+    end
+    tpList.CanvasSize = UDim2.new(0,0,0,y)
+end
+
+-- === REGISTER ===
+local function registerObject(obj)
+    local cat = getCategory(obj)
+    if not cat then return end
+    if objectData[obj] then return end
+    createESP(obj, cat)
+    updateTpList()
+end
+
+local function unregisterObject(obj)
+    removeESP(obj)
+    updateTpList()
+end
+
+-- === INIT ===
+for _, o in ipairs(Workspace:GetDescendants()) do registerObject(o) end
+table.insert(connections, Workspace.DescendantAdded:Connect(registerObject))
+table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
+
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if not CONFIG.ENABLED then
+        for _, d in pairs(objectData) do
+            d.billboard.Enabled = false
+            d.highlight.Enabled = false
+        end
+        return
+    end
+
+    for obj, data in pairs(objectData) do
+        local active = (data.category == "CHEST" and CONFIG.SHOW_CHESTS) or
+                       (data.category == "ITEM" and CONFIG.SHOW_ITEMS) or
+                       (data.category == "RESOURCE" and CONFIG.SHOW_RESOURCES) or
+                       (data.category == "PLAYER" and CONFIG.SHOW_PLAYERS) or
+                       (data.category == "NPC" and CONFIG.SHOW_NPCS) or
+                       (data.category == "MOB" and CONFIG.SHOW_MOBS)
+
+        if obj and obj.Parent and active then
+            local color = getItemColor(obj.Name, data.category)
+            data.text.TextColor3 = color
+            data.highlight.OutlineColor = color
+            data.billboard.Enabled = true
+            data.highlight.Enabled = true
+        else
+            data.billboard.Enabled = false
+            data.highlight.Enabled = false
+        end
+    end
+end))
+
+-- === GUI CREATION ===
+screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ESPDetector"
+screenGui.Parent = playerGui
+
+-- Main Frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 280, 0, 480)
+mainFrame.Position = UDim2.new(0, 30, 0, 30)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,20)
+mainFrame.BackgroundTransparency = 0.1
+mainFrame.Parent = screenGui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 14)
+frameCorner.Parent = mainFrame
+
+-- Title
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1,0,0,50)
+title.Text = "✨ ESP Detector"
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.BackgroundTransparency = 1
+title.Parent = mainFrame
+
+-- Helper for toggles
+local function createToggle(name, posY, default, callback, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0,240,0,35)
+    btn.Position = UDim2.new(0,20,0,posY)
+    btn.BackgroundColor3 = color or Color3.fromRGB(50,50,50)
+    btn.Text = name .. ": " .. (default and "✔" or "✖")
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.TextScaled = true
+    btn.Font = Enum.Font.Gotham
+    btn.Parent = mainFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,8)
+    corner.Parent = btn
+
+    local state = default
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.Text = name .. ": " .. (state and "✔" or "✖")
+        callback(state)
+    end)
+end
+
+createToggle("Show Chests", 60, CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end, Color3.fromRGB(200,160,40))
+createToggle("Show Items", 100, CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end, Color3.fromRGB(50,120,200))
+createToggle("Show Resources", 140, CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end, Color3.fromRGB(100,200,100))
+createToggle("Show Players", 180, CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end, Color3.fromRGB(0,200,200))
+createToggle("Show NPCs", 220, CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end, Color3.fromRGB(150,100,200))
+createToggle("Show Mobs", 260, CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end, Color3.fromRGB(200,60,60))
+
+-- Enable/Disable Button
+local toggleDetector = Instance.new("TextButton")
+toggleDetector.Size = UDim2.new(0,240,0,40)
+toggleDetector.Position = UDim2.new(0,20,0,310)
+toggleDetector.BackgroundColor3 = Color3.fromRGB(50,120,50)
+toggleDetector.Text = "Detector ON"
+toggleDetector.TextColor3 = Color3.new(1,1,1)
+toggleDetector.TextScaled = true
+toggleDetector.Font = Enum.Font.GothamBold
+toggleDetector.Parent = mainFrame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0,8)
+toggleCorner.Parent = toggleDetector
+
+toggleDetector.MouseButton1Click:Connect(function()
+    CONFIG.ENABLED = not CONFIG.ENABLED
+    toggleDetector.Text = CONFIG.ENABLED and "Detector ON" or "Detector OFF"
+    toggleDetector.BackgroundColor3 = CONFIG.ENABLED and Color3.fromRGB(50,120,50) or Color3.fromRGB(150,40,40)
+end)
+
+-- Teleport Buttons
+local campBtn = Instance.new("TextButton")
+campBtn.Size = UDim2.new(0,240,0,40)
+campBtn.Position = UDim2.new(0,20,0,360)
+campBtn.BackgroundColor3 = Color3.fromRGB(200,120,40)
+campBtn.Text = "Teleport to Camp"
+campBtn.TextColor3 = Color3.new(1,1,1)
+campBtn.TextScaled = true
+campBtn.Font = Enum.Font.GothamBold
+campBtn.Parent = mainFrame
+
+local campCorner = Instance.new("UICorner")
+campCorner.CornerRadius = UDim.new(0,8)
+campCorner.Parent = campBtn
+
+campBtn.MouseButton1Click:Connect(function()
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        local root = char.HumanoidRootPart
+        local target = Workspace:FindFirstChild("Camp") or Workspace:FindFirstChild("Base")
+        local targetPos = target and target.Position or CAMP_POSITION
+        local tween = TweenService:Create(root, TweenInfo.new(1, Enum.EasingStyle.Quad), {CFrame = CFrame.new(targetPos)})
+        tween:Play()
+    end
+end)
+
+local tpBtn = Instance.new("TextButton")
+tpBtn.Size = UDim2.new(0,240,0,40)
+tpBtn.Position = UDim2.new(0,20,0,410)
+tpBtn.BackgroundColor3 = Color3.fromRGB(80,80,200)
+tpBtn.Text = "Chest Teleport Menu"
+tpBtn.TextColor3 = Color3.new(1,1,1)
+tpBtn.TextScaled = true
+tpBtn.Font = Enum.Font.GothamBold
+tpBtn.Parent = mainFrame
+
+local tpCorner = Instance.new("UICorner")
+tpCorner.CornerRadius = UDim.new(0,8)
+tpCorner.Parent = tpBtn
+
+-- Chest Teleport Frame
+tpFrame = Instance.new("Frame")
+tpFrame.Size = UDim2.new(0,220,0,250)
+tpFrame.Position = UDim2.new(0,320,0,60)
+tpFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+tpFrame.BackgroundTransparency = 0.15
+tpFrame.Visible = false
+tpFrame.Parent = screenGui
+
+local tpFrameCorner = Instance.new("UICorner")
+tpFrameCorner.CornerRadius = UDim.new(0,10)
+tpFrameCorner.Parent = tpFrame
+
+local tpTitle = Instance.new("TextLabel")
+tpTitle.Size = UDim2.new(1,0,0,30)
+tpTitle.Text = "📦 Chest Teleport"
+tpTitle.TextColor3 = Color3.new(1,1,1)
+tpTitle.TextScaled = true
+tpTitle.BackgroundTransparency = 1
+tpTitle.Font = Enum.Font.GothamBold
+tpTitle.Parent = tpFrame
+
+tpList = Instance.new("ScrollingFrame")
+tpList.Size = UDim2.new(1,0,1,-30)
+tpList.Position = UDim2.new(0,0,0,30)
+tpList.CanvasSize = UDim2.new(0,0,0,0)
+tpList.ScrollBarThickness = 6
+tpList.Parent = tpFrame
+
+tpBtn.MouseButton1Click:Connect(function()
+    tpFrame.Visible = not tpFrame.Visible
+    updateTpList()
+end)
+
+-- Uninject Button
+local uninjectBtn = Instance.new("TextButton")
+uninjectBtn.Size = UDim2.new(0,200,0,40)
+uninjectBtn.Position = UDim2.new(1,-220,1,-60)
+uninjectBtn.BackgroundColor3 = Color3.fromRGB(200,50,50)
+uninjectBtn.Text = "❌ Uninject"
+uninjectBtn.TextColor3 = Color3.new(1,1,1)
+uninjectBtn.TextScaled = true
+uninjectBtn.Font = Enum.Font.GothamBold
+uninjectBtn.Parent = screenGui
+
+local uninjectCorner = Instance.new("UICorner")
+uninjectCorner.CornerRadius = UDim.new(0, 8)
+uninjectCorner.Parent = uninjectBtn
+
+-- === UNINJECT FUNCTION ===
+local function uninject()
+    for _, d in pairs(objectData) do
+        if d.billboard then d.billboard:Destroy() end
+        if d.highlight then d.highlight:Destroy() end
+    end
+    objectData = {}
+
+    for _, c in ipairs(connections) do
+        if typeof(c) == "RBXScriptConnection" then
+            c:Disconnect()
+        end
+    end
+    connections = {}
+
+    if screenGui then
+        screenGui:Destroy()
+    end
+
+    print("❌ ESP Detector uninjected successfully!")
+end
+
+uninjectBtn.MouseButton1Click:Connect(uninject)
+
+print("✅ ESP Detector loaded (Flowers = Resources)!")
