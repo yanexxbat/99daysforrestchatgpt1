@@ -1,7 +1,7 @@
--- === ESP Detector Script (Better Detection, No Duplicate Chests) ===
--- Chests -> "Chest 1, Chest 2..."
--- Flowers, Sticks, Branches -> treated as Resource
--- Full GUI + Chest Teleport + Uninject
+-- === ESP Detector Script (Clean Chest Detection + Intro) ===
+-- One ESP per Chest, no Box false-detects
+-- Flowers & Sticks handled as Resource with whitelist toggle
+-- GUI + Chest Teleport + Intro + Uninject
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -21,6 +21,8 @@ local CONFIG = {
     SHOW_PLAYERS = true,
     SHOW_NPCS = true,
     SHOW_MOBS = true,
+    SHOW_FLOWERS = true,
+    SHOW_STICKS = true,
     MAX_DISPLAY_DISTANCE = 500,
 }
 
@@ -34,7 +36,7 @@ local tpList
 
 -- === TARGETS ===
 local TARGETS = {
-    CHEST = {"chest","crate","box","container","loot"},
+    CHEST = {"chest","crate","loot"}, -- ⚠️ "box" entfernt!
     ITEM = {"axe","sword","bow","key","potion","food","bread","meat","bandage"},
     RESOURCE = {"wood","stone","ore","coal"},
     NPC = {"alien","cultist","npc","villager","soldier","guard"},
@@ -62,20 +64,19 @@ end
 local function getCategory(obj)
     local n = obj.Name:lower()
 
-    -- 🌸 Flowers / Sticks / Branches => Resource
-    if n:find("flower") or n:find("blume") or n:find("stick") or n:find("ast") or n:find("branch") then
-        return "RESOURCE"
+    -- 🌸 Flowers
+    if (n:find("flower") or n:find("blume")) then
+        return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
     end
 
-    -- 📦 Chest detection (only top-level models or unique parts)
-    if (obj:IsA("Model") or obj:IsA("Folder")) and (n:find("chest") or n:find("crate") or n:find("loot")) then
+    -- 🌿 Sticks / Branches
+    if (n:find("stick") or n:find("ast") or n:find("branch")) then
+        return CONFIG.SHOW_STICKS and "RESOURCE" or nil
+    end
+
+    -- 📦 Chest detection (Models only, no duplicate parts)
+    if obj:IsA("Model") and (n:find("chest") or n:find("crate") or n:find("loot")) then
         return "CHEST"
-    elseif obj:IsA("BasePart") and n:find("chest") then
-        if not objectData[obj.Parent] then
-            return "CHEST"
-        else
-            return nil
-        end
     end
 
     -- 🎒 Items
@@ -251,8 +252,22 @@ screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ESPDetector"
 screenGui.Parent = playerGui
 
--- ... [GUI code identical wie vorher: Toggles, Teleport, Uninject] ...
--- (Ich hab den GUI-Teil unverändert gelassen, nur Detection-Logik geändert)
+-- Intro popup
+local intro = Instance.new("TextLabel")
+intro.Size = UDim2.new(0.5,0,0.2,0)
+intro.Position = UDim2.new(0.25,0,0.4,0)
+intro.BackgroundTransparency = 0.3
+intro.BackgroundColor3 = Color3.fromRGB(20,20,20)
+intro.Text = "✨ Made by w3lk and mosty\nft. ChatGPT ✨"
+intro.TextScaled = true
+intro.Font = Enum.Font.GothamBold
+intro.TextColor3 = Color3.new(1,1,1)
+intro.Parent = screenGui
+game:GetService("Debris"):AddItem(intro, 4) -- disappears after 4 sec
+
+-- Hier: Toggle-Buttons für Flowers & Sticks
+-- (analog zu Show Chests, Show Items ...)
+-- ...
 
 -- === UNINJECT FUNCTION ===
 local function uninject()
@@ -276,4 +291,4 @@ local function uninject()
     print("❌ ESP Detector uninjected successfully!")
 end
 
-print("✅ ESP Detector loaded (Better Chest Detection, Flowers/Sticks = Resource)!")
+print("✅ ESP Detector loaded (One chest per name, Flowers/Sticks toggle, Intro)!")
