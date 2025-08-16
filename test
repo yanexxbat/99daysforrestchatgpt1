@@ -4,15 +4,13 @@
 
     Features:
       - Click-GUI (auf/zu klappbar), minimalistischer Purple-Look
-      - Saubere Detection:
-          • Chests: nur Top-Level-Models, kein "box" als Chest
-          • Flowers/Sticks/Branches: Resource (optional ausblendbar)
-          • Spieler / NPC / Mobs / Items / Resources
+      - Saubere Detection (Chests, Items, Ressourcen, Spieler, NPCs, Mobs)
       - Pro Chest nur EIN Name (nummeriert)
       - Chest-Teleport-Liste (anklickbar)
-      - Auto Wood Farm (teleportiert zu Holz-Ressourcen + versucht Prompt/Click)
+      - TP to Camp Button
+      - Auto Wood Farm (Trees fällen mit Axt, Holz einsammeln, ins Campfire bringen)
       - Uninject (alles säubern)
-      - Intro (fade in/out), ohne Emojis
+      - Intro (fade in/out)
 ]]--
 
 --// Services
@@ -21,7 +19,6 @@ local RunService     = game:GetService("RunService")
 local Workspace      = game:GetService("Workspace")
 local TweenService   = game:GetService("TweenService")
 local Debris         = game:GetService("Debris")
-local UserInputService= game:GetService("UserInputService")
 
 local localPlayer    = Players.LocalPlayer
 local playerGui      = localPlayer:WaitForChild("PlayerGui")
@@ -43,11 +40,18 @@ local CONFIG = {
     MAX_DISPLAY_DISTANCE = 600,
 
     AUTO_WOOD_FARM     = false, -- optional: automatische Holz-Route
-    FARM_INTERVAL      = 1.2,   -- Sekunden zwischen Teleports
+    FARM_INTERVAL      = 1.2,   -- Sekunden zwischen Zyklen
     FARM_OFFSET_Y      = 4,     -- kleiner Höhenoffset beim TP
 }
 
--- Farbschema (Purple Theme)
+-- Keywords (falls die Objekte anders heißen → hier ergänzen)
+local NAME_KEYWORDS = {
+    TREE = {"tree","baum"},
+    WOOD = {"wood","log"},
+    CAMP = {"camp","campfire","lagerfeuer"}
+}
+
+-- Farben (Purple Theme)
 local COLORS = {
     bgDark   = Color3.fromRGB(18, 12, 24),
     bgMid    = Color3.fromRGB(30, 22, 42),
@@ -63,55 +67,38 @@ local COLORS = {
     player   = Color3.fromRGB(80, 230, 230),
 }
 
---// Internal State
-local objectData      = {}  -- [Instance] = {billboard, label, category, id?}
+-- Internal state
+local objectData      = {}
 local connections     = {}
 local screenGui       = nil
-
--- Chest-IDs: stabil pro Objekt
 local chestCounter    = 0
-local chestIdByObject = setmetatable({}, {__mode="k"}) -- weak keys
+local chestIdByObject = setmetatable({}, {__mode="k"})
+local destroyed       = false
 
--- GUI refs
-local rootDockBtn, mainFrame, sectionScroll
-local tpFrame, tpList, tpToggleBtn
-local uninjectBtn, autoFarmToggleBtn
-local collapsed = false
+local autoFarmThread  = nil
+local sectionScroll, autoFarmToggleBtn
+local tpFrame, tpList
 
--- Auto-Farm thread
-local autoFarmThread = nil
-local destroyed = false
-
---// Category Sets
+-- Category keywords
 local SETS = {
-    CHEST    = {"chest","crate","loot"}, -- ACHTUNG: "box" ABSICHTLICH NICHT dabei
-    ITEM     = {"axe","sword","bow","key","potion","food","bread","meat","bandage"},
+    CHEST    = {"chest","crate","loot"}, -- „box" ABSICHTLICH NICHT
+    ITEM     = {"axe","sword","bow","key","potion","food","bandage"},
     RESOURCE = {"wood","stone","ore","coal","log","tree"},
     NPC      = {"alien","cultist","npc","villager","soldier","guard"},
     MOB      = {"wolf","bear","rat","spider","skeleton","zombie","mob"},
 }
 
--- Utility: safe lower
-local function lower(s)
-    local ok, v = pcall(function() return s:lower() end)
-    return ok and v or ""
+-- Helpers
+local function lower(s) local ok,v=pcall(function() return s:lower() end) return ok and v or "" end
+
+local function nameMatches(obj, list)
+    local n = lower(obj.Name)
+    for _, key in ipairs(list) do
+        if n:find(key) then return true end
+    end
+    return false
 end
 
--- Decide color by category/name
-local function colorFor(name, category)
-    local n = lower(name)
-    if category == "CHEST"   then return COLORS.chest end
-    if category == "RESOURCE"then return COLORS.resource end
-    if category == "NPC"     then return COLORS.npc end
-    if category == "MOB"     then return COLORS.mob end
-    if category == "PLAYER"  then return COLORS.player end
-    if n:find("sword") then return Color3.fromRGB(240,120,120) end
-    if n:find("bow")   then return Color3.fromRGB(240,170,100) end
-    if n:find("axe")   then return Color3.fromRGB(120,240,120) end
-    return COLORS.text
-end
-
--- MainPart finder
 local function getMainPart(obj)
     if obj:IsA("Model") then
         if obj.PrimaryPart then return obj.PrimaryPart end
@@ -122,62 +109,48 @@ local function getMainPart(obj)
         for _, ch in ipairs(obj:GetChildren()) do
             if ch:IsA("BasePart") then return ch end
         end
-    elseif obj:IsA("BasePart") then
-        return obj
-    end
+    elseif obj:IsA("BasePart") then return obj end
     return nil
 end
 
--- Category detection (robuster, verhindert Chest-Doppelungen)
+local function colorFor(name, category)
+    local n = lower(name)
+    if category == "CHEST"    then return COLORS.chest end
+    if category == "RESOURCE" then return COLORS.resource end
+    if category == "NPC"      then return COLORS.npc end
+    if category == "MOB"      then return COLORS.mob end
+    if category == "PLAYER"   then return COLORS.player end
+    if n:find("sword") then return Color3.fromRGB(240,120,120) end
+    if n:find("bow")   then return Color3.fromRGB(240,170,100) end
+    if n:find("axe")   then return Color3.fromRGB(120,240,120) end
+    return COLORS.text
+end
+
+-- Category detection
 local function getCategory(obj)
     local n = lower(obj.Name)
+    if n:find("flower") or n:find("blume") then return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil end
+    if n:find("stick") or n:find("branch") or n:find("ast") then return CONFIG.SHOW_STICKS and "RESOURCE" or nil end
 
-    -- Explizit: Flowers/Sticks/Branches als Resource (optional ausblendbar)
-    if n:find("flower") or n:find("blume") then
-        return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
-    end
-    if n:find("stick") or n:find("branch") or n:find("ast") then
-        return CONFIG.SHOW_STICKS and "RESOURCE" or nil
-    end
-
-    -- Nur Modelle dürfen Chests sein, KEIN "box" Match
     if obj:IsA("Model") then
         for _, key in ipairs(SETS.CHEST) do
-            if n:find(key) then
-                return "CHEST"
-            end
+            if n:find(key) then return "CHEST" end
         end
     end
 
-    -- Spieler
-    if Players:GetPlayerFromCharacter(obj) then
-        return "PLAYER"
-    end
+    if Players:GetPlayerFromCharacter(obj) then return "PLAYER" end
 
-    -- Andere Sets
     for cat, list in pairs(SETS) do
         if cat ~= "CHEST" then
-            for _, key in ipairs(list) do
-                if n:find(key) then
-                    if cat == "RESOURCE" then
-                        -- respektiere Flower/Stick-Toggles (oben schon behandelt)
-                        return "RESOURCE"
-                    end
-                    return cat
-                end
-            end
+            for _, key in ipairs(list) do if n:find(key) then return cat end end
         end
     end
 
-    -- Tools/Models mit Handle als Item
-    if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then
-        return "ITEM"
-    end
-
+    if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then return "ITEM" end
     return nil
 end
 
--- Billboard/ESP erstellen
+-- ESP Creation
 local function createESP(obj, category)
     local mainPart = getMainPart(obj)
     if not mainPart then return end
@@ -201,12 +174,8 @@ local function createESP(obj, category)
     tl.TextColor3 = colorFor(obj.Name, category)
     tl.Parent = bb
 
-    -- pro Chest nur ein Name + Nummer
     if category == "CHEST" then
-        if not chestIdByObject[obj] then
-            chestCounter += 1
-            chestIdByObject[obj] = chestCounter
-        end
+        if not chestIdByObject[obj] then chestCounter += 1; chestIdByObject[obj] = chestCounter end
         tl.Text = ("Chest %d"):format(chestIdByObject[obj])
     elseif category == "PLAYER" then
         local plr = Players:GetPlayerFromCharacter(obj)
@@ -220,76 +189,59 @@ end
 
 local function removeESP(obj)
     local d = objectData[obj]
-    if d then
-        if d.billboard then d.billboard:Destroy() end
-        objectData[obj] = nil
-    end
-end
-
--- Register / Unregister mit Dedupe (nur Top-Level Models als Chests)
-local function isChildOfRegistered(obj)
-    -- verhindert Doppel-ESP, wenn Child-Parts auftauchen
-    local parent = obj.Parent
-    while parent do
-        if objectData[parent] then return true end
-        parent = parent.Parent
-    end
-    return false
+    if d then if d.billboard then d.billboard:Destroy() end objectData[obj] = nil end
 end
 
 local function registerObject(obj)
-    if destroyed then return end
-    -- Dedupe: wenn Parent bereits registriert -> nichts tun
-    if isChildOfRegistered(obj) then return end
-
+    if destroyed or objectData[obj] then return end
     local cat = getCategory(obj)
-    if not cat then return end
-    if objectData[obj] then return end
-    createESP(obj, cat)
+    if cat then createESP(obj, cat) end
 end
+local function unregisterObject(obj) removeESP(obj) end
 
-local function unregisterObject(obj)
-    removeESP(obj)
-end
+-- Initial scan (Top-Level reicht meist)
+for _, o in ipairs(Workspace:GetChildren()) do registerObject(o) end
 
--- Initial scan
-for _, o in ipairs(Workspace:GetChildren()) do
-    -- Nur Top-Level Models/Parts scannen (Descendants bringen oft Spam)
-    registerObject(o)
-    for _, m in ipairs(o:GetChildren()) do
-        -- nur flach 1 Ebene
-        registerObject(m)
-    end
-end
-
-table.insert(connections, Workspace.DescendantAdded:Connect(function(o)
-    -- leichte Verzögerung, bis Namen/Structure stehen
-    task.defer(registerObject, o)
-end))
+table.insert(connections, Workspace.DescendantAdded:Connect(function(o) task.defer(registerObject, o) end))
 table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
 
--- Sichtbarkeit / Farbe laufend pflegen
-table.insert(connections, RunService.RenderStepped:Connect(function()
+-- Update loop
+local function updateESP()
     if destroyed then return end
     for obj, data in pairs(objectData) do
-        local active =
-            CONFIG.ENABLED and obj and obj.Parent and (
-                (data.category == "CHEST"    and CONFIG.SHOW_CHESTS)    or
-                (data.category == "ITEM"     and CONFIG.SHOW_ITEMS)     or
+        if CONFIG.ENABLED and obj and obj.Parent then
+            local active =
+                (data.category == "CHEST"    and CONFIG.SHOW_CHESTS) or
+                (data.category == "ITEM"     and CONFIG.SHOW_ITEMS) or
                 (data.category == "RESOURCE" and CONFIG.SHOW_RESOURCES) or
-                (data.category == "PLAYER"   and CONFIG.SHOW_PLAYERS)   or
-                (data.category == "NPC"      and CONFIG.SHOW_NPCS)      or
+                (data.category == "PLAYER"   and CONFIG.SHOW_PLAYERS) or
+                (data.category == "NPC"      and CONFIG.SHOW_NPCS) or
                 (data.category == "MOB"      and CONFIG.SHOW_MOBS)
-            )
-
-        if active then
-            data.billboard.Enabled = true
+            data.billboard.Enabled = active
             data.label.TextColor3 = colorFor(obj.Name, data.category)
         else
             data.billboard.Enabled = false
         end
     end
-end))
+end
+
+table.insert(connections, RunService.RenderStepped:Connect(updateESP))
+
+-- Teleport Utility (MoveTo bevorzugt, Fallback Tween)
+local function teleportTo(pos)
+    local char = localPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not hum then return end
+
+    pcall(function() hum:MoveTo(pos) end)
+    task.delay(0.8, function()
+        if not root or destroyed then return end
+        if (root.Position - pos).Magnitude > 6 then
+            TweenService:Create(root, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {CFrame = CFrame.new(pos)}):Play()
+        end
+    end)
+end
 
 --=============================
 -- GUI (Click-GUI, Purple Theme)
@@ -299,38 +251,35 @@ screenGui.Name = "ESP_ClickGUI"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- Dock/Open Button (kleiner Reiter links oben)
-rootDockBtn = Instance.new("TextButton")
-rootDockBtn.Size = UDim2.fromOffset(120, 28)
-rootDockBtn.Position = UDim2.fromOffset(20, 20)
-rootDockBtn.BackgroundColor3 = COLORS.accent
-rootDockBtn.TextColor3 = COLORS.text
-rootDockBtn.Text = "Menu"
-rootDockBtn.TextScaled = true
-rootDockBtn.Font = Enum.Font.GothamBold
-rootDockBtn.Parent = screenGui
-
-local dockCorner = Instance.new("UICorner", rootDockBtn)
-dockCorner.CornerRadius = UDim.new(0, 8)
+-- Dock/Open Button
+local dockBtn = Instance.new("TextButton")
+dockBtn.Size = UDim2.fromOffset(120, 28)
+dockBtn.Position = UDim2.fromOffset(20, 20)
+dockBtn.BackgroundColor3 = COLORS.accent
+dockBtn.TextColor3 = COLORS.text
+dockBtn.Text = "Menu"
+dockBtn.TextScaled = true
+dockBtn.Font = Enum.Font.GothamBold
+dockBtn.Parent = screenGui
+Instance.new("UICorner", dockBtn).CornerRadius = UDim.new(0, 8)
 
 -- Hauptpanel
-mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.fromOffset(320, 480)
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.fromOffset(340, 520)
 mainFrame.Position = UDim2.fromOffset(20, 60)
 mainFrame.BackgroundColor3 = COLORS.bgDark
-mainFrame.Visible = true
 mainFrame.Parent = screenGui
 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 12)
 
--- Titelzeile + Collapse
+-- Header
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 44)
+header.Size = UDim2.new(1, 0, 0, 46)
 header.BackgroundColor3 = COLORS.bgMid
 header.Parent = mainFrame
 Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -88, 1, 0)
+title.Size = UDim2.new(1, -96, 1, 0)
 title.Position = UDim2.new(0, 12, 0, 0)
 title.BackgroundTransparency = 1
 title.Text = "ESP Control"
@@ -340,70 +289,62 @@ title.Font = Enum.Font.GothamBold
 title.Parent = header
 
 local collapseBtn = Instance.new("TextButton")
-collapseBtn.Size = UDim2.fromOffset(72, 28)
-collapseBtn.Position = UDim2.new(1, -84, 0, 8)
+collapseBtn.Size = UDim2.fromOffset(80, 30)
+collapseBtn.Position = UDim2.new(1, -92, 0, 8)
 collapseBtn.BackgroundColor3 = COLORS.accent2
 collapseBtn.TextColor3 = COLORS.text
 collapseBtn.Text = "Hide"
-collapseBtn.Font = Enum.Font.GothamBold
 collapseBtn.TextScaled = true
+collapseBtn.Font = Enum.Font.GothamBold
 collapseBtn.Parent = header
 Instance.new("UICorner", collapseBtn).CornerRadius = UDim.new(0, 8)
 
--- Inhaltsbereich (Scrolling)
+-- Inhalt mit Auto-Layout
 sectionScroll = Instance.new("ScrollingFrame")
-sectionScroll.Size = UDim2.new(1, -20, 1, -64)
-sectionScroll.Position = UDim2.new(0, 10, 0, 54)
+sectionScroll.Size = UDim2.new(1, -20, 1, -66)
+sectionScroll.Position = UDim2.new(0, 10, 0, 56)
 sectionScroll.BackgroundTransparency = 1
 sectionScroll.ScrollBarThickness = 6
 sectionScroll.Parent = mainFrame
 
-local function addSpacer(y) 
-    local s = Instance.new("Frame")
-    s.Size = UDim2.new(1, 0, 0, y); s.BackgroundTransparency = 1; s.Parent = sectionScroll
+local list = Instance.new("UIListLayout", sectionScroll)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Padding = UDim.new(0, 6)
+
+local pad = Instance.new("UIPadding", sectionScroll)
+pad.PaddingTop = UDim.new(0, 4)
+pad.PaddingBottom = UDim.new(0, 6)
+pad.PaddingLeft = UDim.new(0, 2)
+pad.PaddingRight = UDim.new(0, 2)
+
+local function makeRounded(gui)
+    Instance.new("UICorner", gui).CornerRadius = UDim.new(0, 8)
 end
 
--- Toggle Factory (ON/OFF)
+-- Toggle Factory
 local function createToggle(label, default, onChange)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, -4, 0, 34)
-    c.BackgroundColor3 = COLORS.bgMid
-    c.Parent = sectionScroll
-    Instance.new("UICorner", c).CornerRadius = UDim.new(0, 8)
-
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -110, 1, 0)
-    l.Position = UDim2.new(0, 10, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = COLORS.text
-    l.TextScaled = true
-    l.Font = Enum.Font.Gotham
-    l.Parent = c
-
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 90, 0, 28)
-    b.Position = UDim2.new(1, -100, 0, 3)
+    b.Size = UDim2.new(1, -4, 0, 34)
     b.BackgroundColor3 = default and COLORS.ok or COLORS.off
-    b.Text = default and "ON" or "OFF"
+    b.Text = label .. ": " .. (default and "ON" or "OFF")
     b.TextColor3 = COLORS.text
     b.TextScaled = true
     b.Font = Enum.Font.GothamBold
-    b.Parent = c
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.Parent = sectionScroll
+    makeRounded(b)
 
     local state = default
     b.MouseButton1Click:Connect(function()
         state = not state
         b.BackgroundColor3 = state and COLORS.ok or COLORS.off
-        b.Text = state and "ON" or "OFF"
+        b.Text = label .. ": " .. (state and "ON" or "OFF")
         onChange(state)
     end)
 
-    return c
+    return b
 end
 
--- Section: Sichtbarkeit
+-- Toggles
 createToggle("Enable ESP", CONFIG.ENABLED, function(v) CONFIG.ENABLED = v end)
 createToggle("Show Chests", CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end)
 createToggle("Show Items", CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end)
@@ -413,125 +354,55 @@ createToggle("Show NPCs", CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end
 createToggle("Show Mobs", CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end)
 createToggle("Show Flowers", CONFIG.SHOW_FLOWERS, function(v) CONFIG.SHOW_FLOWERS = v end)
 createToggle("Show Sticks", CONFIG.SHOW_STICKS, function(v) CONFIG.SHOW_STICKS = v end)
-addSpacer(6)
 
--- Chest-Teleport Panel Toggle
-tpToggleBtn = Instance.new("TextButton")
+-- Chest Teleport Panel Toggle
+local tpToggleBtn = Instance.new("TextButton")
 tpToggleBtn.Size = UDim2.new(1, -4, 0, 34)
 tpToggleBtn.BackgroundColor3 = COLORS.accent
 tpToggleBtn.TextColor3 = COLORS.text
 tpToggleBtn.Text = "Open Chest Teleport"
-tpToggleBtn.Font = Enum.Font.GothamBold
 tpToggleBtn.TextScaled = true
+tpToggleBtn.Font = Enum.Font.GothamBold
 tpToggleBtn.Parent = sectionScroll
-Instance.new("UICorner", tpToggleBtn).CornerRadius = UDim.new(0, 8)
-addSpacer(6)
+makeRounded(tpToggleBtn)
 
--- Auto Wood Farm Toggle
-autoFarmToggleBtn = createToggle("Auto Wood Farm", CONFIG.AUTO_WOOD_FARM, function(v)
-    CONFIG.AUTO_WOOD_FARM = v
-    if v then
-        -- (re)start farm loop
-        if autoFarmThread then task.cancel(autoFarmThread) end
-        autoFarmThread = task.spawn(function()
-            while CONFIG.AUTO_WOOD_FARM and not destroyed do
-                -- finde nächste Resource mit "wood/log/tree/stick/branch"
-                local char = localPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    local nearest, ndist
-                    for obj, dat in pairs(objectData) do
-                        if dat.category == "RESOURCE" then
-                            local mp = getMainPart(obj)
-                            if mp then
-                                local d = (mp.Position - root.Position).Magnitude
-                                if not ndist or d < ndist then
-                                    nearest, ndist = mp, d
-                                end
-                            end
-                        end
-                    end
-                    if nearest then
-                        local target = nearest.Position + Vector3.new(0, CONFIG.FARM_OFFSET_Y, 0)
-                        local tween = TweenService:Create(root, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {CFrame = CFrame.new(target)})
-                        tween:Play()
-                        tween.Completed:Wait()
+-- Auto Wood Farm Toggle (bind to start/stop)
+autoFarmToggleBtn = Instance.new("TextButton")
+autoFarmToggleBtn.Size = UDim2.new(1, -4, 0, 34)
+autoFarmToggleBtn.BackgroundColor3 = CONFIG.AUTO_WOOD_FARM and COLORS.ok or COLORS.off
+autoFarmToggleBtn.TextColor3 = COLORS.text
+autoFarmToggleBtn.Text = "Auto Wood Farm: " .. (CONFIG.AUTO_WOOD_FARM and "ON" or "OFF")
+autoFarmToggleBtn.TextScaled = true
+autoFarmToggleBtn.Font = Enum.Font.GothamBold
+autoFarmToggleBtn.Parent = sectionScroll
+makeRounded(autoFarmToggleBtn)
 
-                        -- Versuche Interaktion: ProximityPrompt/ClickDetector
-                        local parent = nearest.Parent
-                        if parent then
-                            for _, ins in ipairs(parent:GetDescendants()) do
-                                if ins:IsA("ProximityPrompt") then
-                                    pcall(function()
-                                        ins:InputHoldBegin()
-                                        task.wait(0.2)
-                                        ins:InputHoldEnd()
-                                    end)
-                                elseif ins:IsA("ClickDetector") then
-                                    pcall(function() fireclickdetector(ins) end)
-                                end
-                            end
-                        end
-                    end
-                end
-                task.wait(CONFIG.FARM_INTERVAL)
-            end
-        end)
-    else
-        if autoFarmThread then task.cancel(autoFarmThread) end
-        autoFarmThread = nil
-    end
-end)
-addSpacer(6)
+-- TP to Camp Button
+local tpCampBtn = Instance.new("TextButton")
+tpCampBtn.Size = UDim2.new(1, -4, 0, 34)
+tpCampBtn.BackgroundColor3 = COLORS.accent2
+tpCampBtn.TextColor3 = COLORS.text
+tpCampBtn.Text = "TP to Camp"
+tpCampBtn.TextScaled = true
+tpCampBtn.Font = Enum.Font.GothamBold
+tpCampBtn.Parent = sectionScroll
+makeRounded(tpCampBtn)
 
--- Uninject
-local uninjectBtnContainer = Instance.new("Frame")
-uninjectBtnContainer.Size = UDim2.new(1, -4, 0, 38)
-uninjectBtnContainer.BackgroundColor3 = COLORS.bgMid
-uninjectBtnContainer.Parent = sectionScroll
-Instance.new("UICorner", uninjectBtnContainer).CornerRadius = UDim.new(0, 8)
-
-uninjectBtn = Instance.new("TextButton")
-uninjectBtn.Size = UDim2.new(1, -10, 1, -8)
-uninjectBtn.Position = UDim2.new(0, 5, 0, 4)
+-- Uninject Button
+local uninjectBtn = Instance.new("TextButton")
+uninjectBtn.Size = UDim2.new(1, -4, 0, 34)
 uninjectBtn.BackgroundColor3 = COLORS.off
 uninjectBtn.TextColor3 = COLORS.text
 uninjectBtn.Text = "Uninject"
-uninjectBtn.Font = Enum.Font.GothamBold
 uninjectBtn.TextScaled = true
-uninjectBtn.Parent = uninjectBtnContainer
-Instance.new("UICorner", uninjectBtn).CornerRadius = UDim.new(0, 8)
+uninjectBtn.Font = Enum.Font.GothamBold
+uninjectBtn.Parent = sectionScroll
+makeRounded(uninjectBtn)
 
--- Inhaltshöhe justieren
-do
-    local total = 0
-    for _, ch in ipairs(sectionScroll:GetChildren()) do
-        if ch:IsA("GuiObject") then
-            ch.Position = UDim2.new(0, 0, 0, total)
-            total += ch.AbsoluteSize.Y + 6
-        end
-    end
-    sectionScroll.CanvasSize = UDim2.new(0, 0, 0, total + 10)
-end
-
--- Collapse/Expand Logik
-local function setCollapsed(v)
-    collapsed = v
-    collapseBtn.Text = v and "Show" or "Hide"
-    local targetSize = v and UDim2.fromOffset(320, 52) or UDim2.fromOffset(320, 480)
-    TweenService:Create(mainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Size = targetSize}):Play()
-end
-collapseBtn.MouseButton1Click:Connect(function() setCollapsed(not collapsed) end)
-rootDockBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = not mainFrame.Visible
-end)
-
---=============================
 -- Chest Teleport Window
---=============================
 tpFrame = Instance.new("Frame")
-tpFrame.Size = UDim2.fromOffset(260, 360)
-tpFrame.Position = UDim2.fromOffset(360, 60)
+tpFrame.Size = UDim2.fromOffset(280, 380)
+tpFrame.Position = UDim2.fromOffset(380, 60)
 tpFrame.BackgroundColor3 = COLORS.bgDark
 tpFrame.Visible = false
 tpFrame.Parent = screenGui
@@ -554,72 +425,69 @@ tpList.ScrollBarThickness = 6
 tpList.BackgroundTransparency = 1
 tpList.Parent = tpFrame
 
+local tpListLayout = Instance.new("UIListLayout", tpList)
+tpListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tpListLayout.Padding = UDim.new(0, 6)
+
 local function refreshTpList()
-    if not tpList then return end
     tpList:ClearAllChildren()
-    local y = 0
     for obj, data in pairs(objectData) do
         if data.category == "CHEST" and obj and obj.Parent then
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, -4, 0, 28)
-            btn.Position = UDim2.new(0, 2, 0, y)
             btn.BackgroundColor3 = COLORS.accent
             btn.TextColor3 = COLORS.text
             btn.Text = data.label.Text
-            btn.Font = Enum.Font.Gotham
             btn.TextScaled = true
+            btn.Font = Enum.Font.Gotham
             btn.Parent = tpList
-            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+            makeRounded(btn)
 
             btn.MouseButton1Click:Connect(function()
-                local char = localPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
                 local mp = getMainPart(obj)
-                if root and mp then
-                    local offset = Vector3.new(0, 5, 0)
-                    local tween = TweenService:Create(root, TweenInfo.new(0.8, Enum.EasingStyle.Quad), {CFrame = CFrame.new(mp.Position + offset)})
-                    tween:Play()
-                    tween.Completed:Wait()
-                    tpFrame.Visible = false
-                end
+                if mp then teleportTo(mp.Position + Vector3.new(0,5,0)) end
+                tpFrame.Visible = false
             end)
-
-            y += 32
         end
     end
-    tpList.CanvasSize = UDim2.new(0, 0, 0, y + 6)
 end
+
+-- GUI interactivity
+local collapsed = false
+local function setCollapsed(v)
+    collapsed = v
+    collapseBtn.Text = v and "Show" or "Hide"
+    local target = v and UDim2.fromOffset(340, 60) or UDim2.fromOffset(340, 520)
+    TweenService:Create(mainFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Size = target}):Play()
+end
+
+collapseBtn.MouseButton1Click:Connect(function() setCollapsed(not collapsed) end)
+dockBtn.MouseButton1Click:Connect(function() mainFrame.Visible = not mainFrame.Visible end)
 
 tpToggleBtn.MouseButton1Click:Connect(function()
     tpFrame.Visible = not tpFrame.Visible
     if tpFrame.Visible then refreshTpList() end
 end)
 
--- Halte TP-Liste aktuell
-table.insert(connections, RunService.Stepped:Connect(function()
+-- Keep tp list fresh when open
+local tpRefreshConn = RunService.Stepped:Connect(function()
+    if destroyed then return end
     if tpFrame.Visible then refreshTpList() end
-end))
+end)
+table.insert(connections, tpRefreshConn)
 
---=============================
--- Uninject
---=============================
+-- Uninject logic
 local function uninject()
     destroyed = true
     CONFIG.AUTO_WOOD_FARM = false
     if autoFarmThread then task.cancel(autoFarmThread) end
 
     for _, c in ipairs(connections) do
-        if typeof(c) == "RBXScriptConnection" then
-            pcall(function() c:Disconnect() end)
-        end
+        if typeof(c) == "RBXScriptConnection" then pcall(function() c:Disconnect() end) end
     end
     connections = {}
 
-    for obj, d in pairs(objectData) do
-        pcall(function()
-            if d.billboard then d.billboard:Destroy() end
-        end)
-    end
+    for obj, d in pairs(objectData) do pcall(function() if d.billboard then d.billboard:Destroy() end end) end
     objectData = {}
     chestIdByObject = setmetatable({}, {__mode="k"})
     chestCounter = 0
@@ -630,6 +498,109 @@ end
 uninjectBtn.MouseButton1Click:Connect(uninject)
 
 --=============================
+-- Auto Wood Farm
+--=============================
+local function startWoodFarm()
+    if autoFarmThread then task.cancel(autoFarmThread) end
+    autoFarmThread = task.spawn(function()
+        while CONFIG.AUTO_WOOD_FARM and not destroyed do
+            local char = localPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                -- 1) Nächsten Baum finden
+                local nearestTree, ndist
+                for obj, dat in pairs(objectData) do
+                    if nameMatches(obj, NAME_KEYWORDS.TREE) then
+                        local mp = getMainPart(obj)
+                        if mp then
+                            local d = (mp.Position - root.Position).Magnitude
+                            if not ndist or d < ndist then nearestTree, ndist = mp, d end
+                        end
+                    end
+                end
+
+                if nearestTree then
+                    teleportTo(nearestTree.Position + Vector3.new(0, CONFIG.FARM_OFFSET_Y, 0))
+                    task.wait(0.6)
+
+                    -- 2) Axt benutzen (falls vorhanden)
+                    local tool = char:FindFirstChildWhichIsA("Tool") or localPlayer.Backpack:FindFirstChildWhichIsA("Tool")
+                    if tool and lower(tool.Name):find("axe") then
+                        for i=1,6 do
+                            pcall(function() tool.Parent = char; tool:Activate() end)
+                            task.wait(0.25)
+                        end
+                    else
+                        -- Kein Tool → trotzdem versuchen, Prompts am Baum auszulösen
+                        local parent = nearestTree.Parent
+                        if parent then
+                            for _, ins in ipairs(parent:GetDescendants()) do
+                                if ins:IsA("ProximityPrompt") then
+                                    pcall(function() ins:InputHoldBegin(); task.wait(0.3); ins:InputHoldEnd() end)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                -- 3) Holz einsammeln (in der Nähe)
+                for obj, dat in pairs(objectData) do
+                    if nameMatches(obj, NAME_KEYWORDS.WOOD) then
+                        local mp = getMainPart(obj)
+                        if mp and (mp.Position - root.Position).Magnitude < 35 then
+                            teleportTo(mp.Position + Vector3.new(0, 2, 0))
+                            task.wait(0.2)
+                            for _, ins in ipairs(obj:GetDescendants()) do
+                                if ins:IsA("ProximityPrompt") then
+                                    pcall(function() ins:InputHoldBegin(); task.wait(0.25); ins:InputHoldEnd() end)
+                                elseif ins:IsA("ClickDetector") then
+                                    pcall(function() fireclickdetector(ins) end)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                -- 4) Zum Camp laufen und abgeben
+                for _, obj in ipairs(Workspace:GetChildren()) do
+                    if nameMatches(obj, NAME_KEYWORDS.CAMP) then
+                        local mp = getMainPart(obj)
+                        if mp then
+                            teleportTo(mp.Position + Vector3.new(0, 5, 0))
+                            task.wait(0.4)
+                            for _, ins in ipairs(obj:GetDescendants()) do
+                                if ins:IsA("ProximityPrompt") then
+                                    pcall(function() ins:InputHoldBegin(); task.wait(0.25); ins:InputHoldEnd() end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            task.wait(CONFIG.FARM_INTERVAL)
+        end
+    end)
+end
+
+autoFarmToggleBtn.MouseButton1Click:Connect(function()
+    CONFIG.AUTO_WOOD_FARM = not CONFIG.AUTO_WOOD_FARM
+    autoFarmToggleBtn.BackgroundColor3 = CONFIG.AUTO_WOOD_FARM and COLORS.ok or COLORS.off
+    autoFarmToggleBtn.Text = "Auto Wood Farm: " .. (CONFIG.AUTO_WOOD_FARM and "ON" or "OFF")
+    if CONFIG.AUTO_WOOD_FARM then startWoodFarm() elseif autoFarmThread then task.cancel(autoFarmThread) autoFarmThread = nil end
+end)
+
+-- TP to Camp action
+local function tpToCamp()
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if nameMatches(obj, NAME_KEYWORDS.CAMP) then
+            local mp = getMainPart(obj)
+            if mp then teleportTo(mp.Position + Vector3.new(0,5,0)) end
+        end
+    end
+end
+tpCampBtn.MouseButton1Click:Connect(tpToCamp)
+
+--=============================
 -- Intro (ohne Emojis, Fade)
 --=============================
 do
@@ -637,7 +608,8 @@ do
     intro.Size = UDim2.new(0.5, 0, 0.16, 0)
     intro.Position = UDim2.new(0.25, 0, 0.38, 0)
     intro.BackgroundColor3 = COLORS.bgMid
-    intro.Text = "Made by w3lk and mosty\nft. ChatGPT"
+    intro.Text = "Made by w3lk and mosty
+ft. ChatGPT"
     intro.TextColor3 = COLORS.text
     intro.TextScaled = true
     intro.Font = Enum.Font.GothamBold
@@ -651,7 +623,7 @@ do
         TextTransparency = 0
     }):Play()
 
-    task.delay(2.8, function()
+    task.delay(2.6, function()
         TweenService:Create(intro, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {
             BackgroundTransparency = 1,
             TextTransparency = 1
@@ -660,4 +632,4 @@ do
     end)
 end
 
-print("ESP / Utility Suite loaded: Click-GUI + Chest TP + Auto Wood Farm (optional)")
+print("ESP / Utility Suite loaded: Click-GUI + Chest TP + Camp TP + Auto Wood Farm (optional)")
