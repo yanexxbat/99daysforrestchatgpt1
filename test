@@ -1,7 +1,6 @@
--- === ESP Detector Script (Minimal GUI + Intro + Animations) ===
--- One ESP per Chest, no Box false-detects
--- Flowers & Sticks as Resource (toggleable)
--- Minimalist GUI + Chest Teleport + Uninject + Animated Intro
+-- === ESP Detector Script (Minimal GUI + Clean Intro) ===
+-- One ESP per Chest, Flowers/Sticks toggleable
+-- Minimal GUI + Chest Teleport + Uninject
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,8 +9,6 @@ local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
-local CAMP_POSITION = Vector3.new(0,5,0)
 
 local CONFIG = {
     ENABLED = true,
@@ -30,24 +27,19 @@ local objectData = {}
 local chestCounter = 0
 local connections = {}
 local screenGui
-local tpFrame
-local tpList
 
 -- === CATEGORY DETECTION ===
 local function getCategory(obj)
     local n = obj.Name:lower()
-
     if (n:find("flower") or n:find("blume")) then
         return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
     end
     if (n:find("stick") or n:find("ast") or n:find("branch")) then
         return CONFIG.SHOW_STICKS and "RESOURCE" or nil
     end
-
     if obj:IsA("Model") and (n:find("chest") or n:find("crate") or n:find("loot")) then
         return "CHEST"
     end
-
     local sets = {
         ITEM = {"axe","sword","bow","key","potion","food","bread","meat","bandage"},
         RESOURCE = {"wood","stone","ore","coal"},
@@ -57,7 +49,6 @@ local function getCategory(obj)
     for cat, list in pairs(sets) do
         for _, v in ipairs(list) do if n:find(v) then return cat end end
     end
-
     if Players:GetPlayerFromCharacter(obj) then return "PLAYER" end
     return nil
 end
@@ -83,7 +74,7 @@ local function createESP(obj, category)
     if not mainPart then return end
 
     local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0,160,0,30)
+    billboard.Size = UDim2.new(0,160,0,25)
     billboard.StudsOffset = Vector3.new(0,3,0)
     billboard.AlwaysOnTop = true
     billboard.MaxDistance = CONFIG.MAX_DISPLAY_DISTANCE
@@ -95,7 +86,7 @@ local function createESP(obj, category)
     text.BackgroundTransparency = 1
     text.TextScaled = true
     text.Font = Enum.Font.GothamBold
-    text.TextColor3 = Color3.fromRGB(255,255,255)
+    text.TextColor3 = Color3.new(1,1,1)
     text.Parent = billboard
 
     if category == "CHEST" then
@@ -118,7 +109,6 @@ local function removeESP(obj)
     end
 end
 
--- === REGISTER ===
 local function registerObject(obj)
     local cat = getCategory(obj)
     if not cat then return end
@@ -130,11 +120,12 @@ local function unregisterObject(obj)
     removeESP(obj)
 end
 
+-- Initial scan
 for _, o in ipairs(Workspace:GetDescendants()) do registerObject(o) end
 table.insert(connections, Workspace.DescendantAdded:Connect(registerObject))
 table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
 
--- === RENDER LOOP ===
+-- Update loop
 table.insert(connections, RunService.RenderStepped:Connect(function()
     for obj, data in pairs(objectData) do
         if CONFIG.ENABLED and obj and obj.Parent then
@@ -156,11 +147,11 @@ screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ESPDetector"
 screenGui.Parent = playerGui
 
--- Main Panel
+-- Main Frame
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0,220,0,400)
+mainFrame.Size = UDim2.new(0,200,0,320)
 mainFrame.Position = UDim2.new(0,20,0,60)
-mainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Parent = screenGui
 
@@ -170,7 +161,7 @@ uiCorner.Parent = mainFrame
 
 -- Title
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1,0,0,40)
+title.Size = UDim2.new(1,0,0,30)
 title.BackgroundTransparency = 1
 title.Text = "ESP Detector"
 title.Font = Enum.Font.GothamBold
@@ -178,12 +169,12 @@ title.TextColor3 = Color3.new(1,1,1)
 title.TextScaled = true
 title.Parent = mainFrame
 
--- Helper for Toggle Buttons
+-- Toggle Button Creator
 local function createToggle(name, posY, default, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0,200,0,30)
+    btn.Size = UDim2.new(0,180,0,25)
     btn.Position = UDim2.new(0,10,0,posY)
-    btn.BackgroundColor3 = default and Color3.fromRGB(40,140,60) or Color3.fromRGB(140,40,40)
+    btn.BackgroundColor3 = default and Color3.fromRGB(50,160,70) or Color3.fromRGB(160,50,50)
     btn.Text = name .. ": " .. (default and "ON" or "OFF")
     btn.TextColor3 = Color3.new(1,1,1)
     btn.TextScaled = true
@@ -193,26 +184,26 @@ local function createToggle(name, posY, default, callback)
     local state = default
     btn.MouseButton1Click:Connect(function()
         state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(40,140,60) or Color3.fromRGB(140,40,40)
+        btn.BackgroundColor3 = state and Color3.fromRGB(50,160,70) or Color3.fromRGB(160,50,50)
         btn.Text = name .. ": " .. (state and "ON" or "OFF")
         callback(state)
     end)
 end
 
--- Toggles
-createToggle("Show Chests", 50, CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end)
-createToggle("Show Items", 90, CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end)
-createToggle("Show Resources", 130, CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end)
-createToggle("Show Players", 170, CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end)
-createToggle("Show NPCs", 210, CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end)
-createToggle("Show Mobs", 250, CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end)
-createToggle("Show Flowers", 290, CONFIG.SHOW_FLOWERS, function(v) CONFIG.SHOW_FLOWERS = v end)
-createToggle("Show Sticks", 330, CONFIG.SHOW_STICKS, function(v) CONFIG.SHOW_STICKS = v end)
+-- Add Toggles
+createToggle("Show Chests", 40, CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end)
+createToggle("Show Items", 70, CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end)
+createToggle("Show Resources", 100, CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end)
+createToggle("Show Players", 130, CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end)
+createToggle("Show NPCs", 160, CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end)
+createToggle("Show Mobs", 190, CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end)
+createToggle("Show Flowers", 220, CONFIG.SHOW_FLOWERS, function(v) CONFIG.SHOW_FLOWERS = v end)
+createToggle("Show Sticks", 250, CONFIG.SHOW_STICKS, function(v) CONFIG.SHOW_STICKS = v end)
 
 -- Uninject Button
 local uninjectBtn = Instance.new("TextButton")
-uninjectBtn.Size = UDim2.new(0,200,0,35)
-uninjectBtn.Position = UDim2.new(0,10,0,370)
+uninjectBtn.Size = UDim2.new(0,180,0,30)
+uninjectBtn.Position = UDim2.new(0,10,0,280)
 uninjectBtn.BackgroundColor3 = Color3.fromRGB(180,50,50)
 uninjectBtn.Text = "Uninject"
 uninjectBtn.TextColor3 = Color3.new(1,1,1)
@@ -228,7 +219,7 @@ uninjectBtn.MouseButton1Click:Connect(function()
     for _, c in ipairs(connections) do if typeof(c) == "RBXScriptConnection" then c:Disconnect() end end
     connections = {}
     screenGui:Destroy()
-    print("❌ ESP Detector uninjected successfully!")
+    print("ESP Detector uninjected successfully!")
 end)
 
 -- === INTRO SCREEN ===
@@ -249,12 +240,10 @@ corner.Parent = intro
 intro.BackgroundTransparency = 1
 intro.TextTransparency = 1
 
--- Fade In
 TweenService:Create(intro, TweenInfo.new(1), {BackgroundTransparency = 0.2, TextTransparency = 0}):Play()
--- Fade Out after 3 sec
 task.delay(3, function()
     TweenService:Create(intro, TweenInfo.new(1), {BackgroundTransparency = 1, TextTransparency = 1}):Play()
     game:GetService("Debris"):AddItem(intro, 2)
 end)
 
-print("✅ ESP Detector loaded (Minimal GUI + Intro)!")
+print("ESP Detector loaded (Minimal GUI + Clean Intro)")
