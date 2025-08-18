@@ -1,195 +1,121 @@
---[[ 
-    Noctis Utility - ESP Suite (Modern Sidebar GUI) - FIXED VERSION
-    - Modern sidebar with Visual, Player, Teleport, and Misc categories
-    - Dark theme with blue accent colors
-    - All original features preserved
-    - FIXED: Unicode characters replaced with ASCII
-    - FIXED: Uninject button in separate section
-    - FIXED: Better error handling
-    - Layer 7 compatible movement features
-]]
-
---// Services
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local Workspace        = game:GetService("Workspace")
-local TweenService     = game:GetService("TweenService")
-local Debris           = game:GetService("Debris")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local localPlayer = Players.LocalPlayer
 
-local localPlayer      = Players.LocalPlayer
-local playerGui        = localPlayer:WaitForChild("PlayerGui")
+-- Debug-Ausgaben
+print("Noctis Utility V2 - Loading...")
 
---// Constants
-local CONSTANTS = {
-    GUI_REFRESH_INTERVAL = 0.3,
-    DUMMY_PART_LIFETIME = 0.5,
-    CHECKBOX_SIZE = 16,
-    LAYOUT_SPACING = 6,
-    MAX_STEP_TP_REPEAT = 25,
-    ESP_UPDATE_INTERVAL = 0.1,
-}
-
---// Config
-local CONFIG = {
-    ENABLED               = true,
-    
-    -- Visibility Toggles
-    SHOW_CHESTS           = true,
-    SHOW_ITEMS            = true,
-    SHOW_RESOURCES        = true,
-    SHOW_PLAYERS          = true,
-    SHOW_NPCS             = true,
-    SHOW_MOBS             = true,
-    SHOW_CAMPS            = true,
-    
-    -- Sub-category toggles
-    SHOW_FLOWERS          = true,
-    SHOW_STICKS           = true,
-    
-    -- Name display toggles
-    SHOW_CHEST_NAMES      = true,
-    SHOW_ITEM_NAMES       = true,
-    SHOW_RESOURCE_NAMES   = true,
-    SHOW_PLAYER_NAMES     = true,
-    SHOW_NPC_NAMES        = true,
-    SHOW_MOB_NAMES        = true,
-    SHOW_CAMP_NAMES       = true,
-    
-    MAX_DISPLAY_DISTANCE  = 800,
-    
-    -- Step-TP Settings
-    STEP_TP_OFFSET_Y      = 5,
-    STEP_TP_REPEAT        = 15,
-    STEP_TP_DELAY         = 0.04,
-    
-    -- Movement Settings
-    INFINITE_JUMP         = false,
-    SPEED_BOOST           = false,
-    SPEED_VALUE           = 50,
-}
-
--- Modern Dark Colors
-local COLORS = {
-    background    = Color3.fromRGB(25, 25, 25),
-    sidebar       = Color3.fromRGB(35, 35, 35),
-    content       = Color3.fromRGB(45, 45, 45),
-    accent        = Color3.fromRGB(64, 156, 255),
-    accentHover   = Color3.fromRGB(100, 180, 255),
-    text          = Color3.fromRGB(255, 255, 255),
-    textSub       = Color3.fromRGB(180, 180, 180),
-    textDim       = Color3.fromRGB(120, 120, 120),
-    success       = Color3.fromRGB(76, 175, 80),
-    danger        = Color3.fromRGB(244, 67, 54),
-    warning       = Color3.fromRGB(255, 193, 7),
-    -- ESP Colors
-    chest         = Color3.fromRGB(255, 215, 0),
-    resource      = Color3.fromRGB(100, 150, 255),
-    npc           = Color3.fromRGB(80, 220, 120),
-    mob           = Color3.fromRGB(255, 90, 90),
-    player        = Color3.fromRGB(80, 220, 255),
-    camp          = Color3.fromRGB(255, 140, 80),
-    item          = Color3.fromRGB(255, 180, 100),
-}
-
--- Internal State
-local objectData       = {}
-local connections      = {}
-local screenGui        = nil
-local destroyed        = false
-local spawnPoint       = Vector3.new(0, 50, 0)
-
--- Movement state
-local originalWalkSpeed = 16
-local jumpConnection = nil
-
--- IDs
-local chestCounter     = 0
-local chestIdByObject  = setmetatable({}, {__mode="k"})
-local campCounter      = 0
-local campIdByObject   = setmetatable({}, {__mode="k"})
-
--- GUI Refs
-local mainFrame
-local sidebar
-local contentFrame
-local currentCategory = "Visual"
-
--- Performance tracking
-local lastRefreshTime = {chest = 0, camp = 0, esp = 0}
-local refreshDebounce = {}
-
--- Get spawn point
-task.spawn(function()
-    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-    local humanoidRootPart = char:WaitForChild("HumanoidRootPart")
-    task.wait(2)
-    spawnPoint = humanoidRootPart.Position
-end)
-
--- Category detection sets
-local SETS = {
-    CHEST    = {"chest","kiste"},
-    ITEM     = {"axe", "sword", "bow", "key", "potion", "food", "bread", "meat", "bandage", "tool", "weapon", "hammer", "pickaxe"},
-    RESOURCE = {"wood", "stone", "ore", "coal", "log", "tree", "rock", "iron", "gold", "diamond", "crystal", "metal", "copper"},
-    NPC      = {"alien", "cultist", "npc", "villager", "soldier", "guard", "merchant", "trader", "bandit", "survivor"},
-    MOB      = {"wolf", "bear", "rat", "spider", "skeleton", "zombie", "mob", "enemy", "monster", "mutant", "cannibal"},
-    CAMP     = {"camp", "campfire", "lagerfeuer", "firepit", "fire pit", "bonfire", "flame", "fire"},
-    FLOWER   = {"flower", "blume", "blossom", "petal", "bloom", "rose", "daisy", "tulip", "sunflower"},
-    STICK    = {"stick", "branch", "ast", "twig", "zweig", "log_stick", "wood_stick"},
-}
-
---=============================
--- Movement Functions
---=============================
-
-local function setupInfiniteJump()
-    if jumpConnection then
-        jumpConnection:Disconnect()
-        jumpConnection = nil
-    end
-    
-    if CONFIG.INFINITE_JUMP then
-        jumpConnection = UserInputService.JumpRequest:Connect(function()
-            local character = localPlayer.Character
-            if character then
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    pcall(function()
-                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-                    end)
-                end
-            end
+-- Sichere Disconnect-Funktion
+local function safeDisconnect(connection)
+    if connection and typeof(connection) == "RBXScriptConnection" and connection.Connected then
+        pcall(function()
+            connection:Disconnect()
         end)
     end
 end
 
-local function setupSpeedBoost()
-    local character = localPlayer.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            if CONFIG.SPEED_BOOST then
-                if originalWalkSpeed == 16 then
-                    originalWalkSpeed = humanoid.WalkSpeed
+-- Sichere Notification Funktion
+local function sendNotification(title, text, duration)
+    pcall(function()
+        game.StarterGui:SetCore("SendNotification", {
+            Title = title;
+            Text = text;
+            Duration = duration or 5;
+        })
+    end)
+end
+
+-- Konfiguration
+local CONFIG = {
+    ENABLED = true,
+    SHOW_CHESTS = true,
+    SHOW_ITEMS = true,
+    SHOW_RESOURCES = true,
+    SHOW_PLAYERS = true,
+    SHOW_NPCS = true,
+    SHOW_MOBS = true,
+    SHOW_CAMPS = true,
+    SHOW_FLOWERS = true,
+    SHOW_STICKS = true,
+    SHOW_CHEST_NAMES = true,
+    SHOW_ITEM_NAMES = true,
+    SHOW_RESOURCE_NAMES = true,
+    SHOW_PLAYER_NAMES = true,
+    SHOW_NPC_NAMES = true,
+    SHOW_MOB_NAMES = true,
+    SHOW_CAMP_NAMES = true,
+    MAX_DISPLAY_DISTANCE = 800,
+    STEP_TP_OFFSET_Y = 5,
+    STEP_TP_REPEAT = 15,
+    STEP_TP_DELAY = 0.04,
+    INFINITE_JUMP = false,
+    SPEED_BOOST = false,
+    SPEED_VALUE = 50,
+    NOCLIP = false,
+    GOD_MODE = false,
+    INVISIBLE = false,
+    ANTI_AFK = false,
+    FLY_MODE = false,
+    FLY_SPEED = 50,
+}
+
+local COLORS = {
+    chest = Color3.fromRGB(255, 215, 0),
+    resource = Color3.fromRGB(100, 150, 255),
+    npc = Color3.fromRGB(80, 220, 120),
+    mob = Color3.fromRGB(255, 90, 90),
+    player = Color3.fromRGB(80, 220, 255),
+    camp = Color3.fromRGB(255, 140, 80),
+    item = Color3.fromRGB(255, 180, 100),
+}
+
+local objectData = {}
+local connections = {}
+local destroyed = false
+local spawnPoint = Vector3.new(0, 50, 0)
+local originalWalkSpeed = 16
+local jumpConnection, noclipConnection, flyConnection, antiAFKConnection
+local chestCounter = 0
+local chestIdByObject = setmetatable({}, {__mode="k"})
+local campCounter = 0
+local campIdByObject = setmetatable({}, {__mode="k"})
+local bodyVelocity = nil
+
+-- Sichere Character-Erkennung
+local function setupCharacter()
+    task.spawn(function()
+        pcall(function()
+            local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+            if char then
+                local root = char:WaitForChild("HumanoidRootPart", 10)
+                if root then
+                    task.wait(2)
+                    spawnPoint = root.Position
+                    local humanoid = char:WaitForChild("Humanoid", 5)
+                    if humanoid then
+                        originalWalkSpeed = humanoid.WalkSpeed
+                    end
+                    print("Spawn point set:", spawnPoint)
+                    print("Original WalkSpeed:", originalWalkSpeed)
                 end
-                humanoid.WalkSpeed = CONFIG.SPEED_VALUE
-            else
-                humanoid.WalkSpeed = originalWalkSpeed
             end
-        end
-    end
+        end)
+    end)
 end
 
-local function onCharacterAdded(character)
-    character:WaitForChild("Humanoid")
-    task.wait(1)
-    setupSpeedBoost()
-end
-
---=============================
--- Utility Functions
---=============================
+local SETS = {
+    CHEST = {"chest","kiste",},
+    ITEM = {"axe", "sword", "bow", "key", "potion", "food", "bread", "meat", "bandage", "tool", "weapon", "hammer", "pickaxe", "gun", "rifle", "pistol", "knife"},
+    RESOURCE = {"wood", "stone", "ore", "coal", "log", "tree", "rock", "iron", "gold", "diamond", "crystal", "metal", "copper", "silver", "branch"},
+    NPC = {"alien", "cultist", "npc", "villager", "soldier", "guard", "merchant", "trader", "bandit", "survivor", "human", "bot"},
+    MOB = {"wolf", "bear", "rat", "spider", "skeleton", "zombie", "mob", "enemy", "monster", "mutant", "cannibal", "beast", "animal"},
+    CAMP = {"camp", "campfire", "lagerfeuer", "firepit", "fire pit", "bonfire", "flame", "fire"},
+    FLOWER = {"flower", "blume", "blossom", "petal", "bloom", "rose", "daisy", "tulip", "sunflower", "plant"},
+    STICK = {"stick", "branch", "ast", "twig", "zweig", "log_stick", "wood_stick", "stab"},
+}
 
 local function safeLower(s)
     if not s then return "" end
@@ -198,193 +124,383 @@ local function safeLower(s)
 end
 
 local function colorFor(name, category)
-    if category == "CHEST" then return COLORS.chest end
-    if category == "RESOURCE" then return COLORS.resource end
-    if category == "NPC" then return COLORS.npc end
-    if category == "MOB" then return COLORS.mob end
-    if category == "PLAYER" then return COLORS.player end
-    if category == "CAMP" then return COLORS.camp end
-    if category == "ITEM" then return COLORS.item end
-    return COLORS.text
+    return COLORS[category:lower()] or Color3.fromRGB(255, 255, 255)
 end
 
 local function stepTeleport(root, destination)
-    if not root or not root.Parent then return false end
-    if not destination or typeof(destination) ~= "Vector3" then return false end
-    
-    local repeatCount = math.min(CONFIG.STEP_TP_REPEAT, CONSTANTS.MAX_STEP_TP_REPEAT)
-    local targetPos = destination + Vector3.new(0, CONFIG.STEP_TP_OFFSET_Y, 0)
-    
-    for i = 1, repeatCount do
-        if not root or not root.Parent then return false end
-        
-        local success = pcall(function()
+    if not root or not root.Parent or not destination then return false end
+    print("Teleporting to:", destination)
+    pcall(function()
+        local targetPos = destination + Vector3.new(0, CONFIG.STEP_TP_OFFSET_Y, 0)
+        for i = 1, CONFIG.STEP_TP_REPEAT do
+            if not root or not root.Parent then break end
             root.CFrame = CFrame.new(targetPos)
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        end)
-        
-        if not success then return false end
-        task.wait(CONFIG.STEP_TP_DELAY)
-    end
-    
+            task.wait(CONFIG.STEP_TP_DELAY)
+        end
+    end)
     return true
 end
 
 local function getMainPart(obj)
     if not obj or not obj.Parent then return nil end
-    
-    if obj:IsA("Model") then
-        if obj.PrimaryPart and obj.PrimaryPart.Parent then 
-            return obj.PrimaryPart 
-        end
-        
-        local commonNames = {"HumanoidRootPart", "Torso", "UpperTorso", "Handle", "Head", "Root"}
-        for _, nm in ipairs(commonNames) do
-            local p = obj:FindFirstChild(nm)
-            if p and p:IsA("BasePart") and p.Parent then 
-                return p 
+    local success, result = pcall(function()
+        if obj:IsA("Model") then
+            if obj.PrimaryPart and obj.PrimaryPart.Parent then return obj.PrimaryPart end
+            local names = {"HumanoidRootPart", "Torso", "UpperTorso", "Handle", "Head", "Root", "Part"}
+            for _, name in ipairs(names) do
+                local part = obj:FindFirstChild(name)
+                if part and part:IsA("BasePart") and part.Parent then return part end
             end
-        end
-        
-        for _, ch in ipairs(obj:GetDescendants()) do
-            if ch:IsA("BasePart") and ch.Parent then 
-                return ch 
+            for _, child in ipairs(obj:GetDescendants()) do
+                if child:IsA("BasePart") and child.Parent then return child end
             end
+        elseif obj:IsA("BasePart") then
+            return obj.Parent and obj or nil
+        elseif obj:IsA("Humanoid") and obj.Parent then
+            return obj.Parent:FindFirstChild("HumanoidRootPart")
         end
-    elseif obj:IsA("BasePart") then
-        return obj.Parent and obj or nil
-    elseif obj:IsA("Humanoid") and obj.Parent then
-        return obj.Parent:FindFirstChild("HumanoidRootPart")
-    end
-    
-    return nil
+    end)
+    return success and result or nil
 end
 
-local function debouncedCall(key, func, delay)
-    delay = delay or 0.1
-    if refreshDebounce[key] then return end
+-- Feature Setup Functions
+local function setupInfiniteJump()
+    safeDisconnect(jumpConnection)
+    jumpConnection = nil
     
-    refreshDebounce[key] = true
-    task.spawn(function()
-        task.wait(delay)
-        if not destroyed then
-            pcall(func)
+    if CONFIG.INFINITE_JUMP then
+        local success, connection = pcall(function()
+            return UserInputService.JumpRequest:Connect(function()
+                local char = localPlayer.Character
+                if char then
+                    local humanoid = char:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        pcall(function() 
+                            humanoid:ChangeState(Enum.HumanoidStateType.Jumping) 
+                        end)
+                    end
+                end
+            end)
+        end)
+        if success then
+            jumpConnection = connection
+            print("Infinite Jump enabled")
         end
-        refreshDebounce[key] = nil
+    else
+        print("Infinite Jump disabled")
+    end
+end
+
+local function setupSpeedBoost()
+    pcall(function()
+        local char = localPlayer.Character
+        if char then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.WalkSpeed = CONFIG.SPEED_BOOST and CONFIG.SPEED_VALUE or originalWalkSpeed
+                print("Speed set to:", humanoid.WalkSpeed)
+            end
+        end
     end)
 end
 
---=============================
--- Category Detection
---=============================
+local function setupNoclip()
+    safeDisconnect(noclipConnection)
+    noclipConnection = nil
+    
+    if CONFIG.NOCLIP then
+        local success, connection = pcall(function()
+            return RunService.Stepped:Connect(function()
+                local char = localPlayer.Character
+                if char then
+                    pcall(function()
+                        for _, part in pairs(char:GetDescendants()) do
+                            if part:IsA("BasePart") then 
+                                part.CanCollide = false 
+                            end
+                        end
+                    end)
+                end
+            end)
+        end)
+        if success then
+            noclipConnection = connection
+            print("NoClip enabled")
+        end
+    else
+        pcall(function()
+            local char = localPlayer.Character
+            if char then
+                for _, part in pairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then 
+                        part.CanCollide = true 
+                    end
+                end
+            end
+        end)
+        print("NoClip disabled")
+    end
+end
+
+local function setupFlyMode()
+    safeDisconnect(flyConnection)
+    flyConnection = nil
+    
+    if bodyVelocity then
+        pcall(function() bodyVelocity:Destroy() end)
+        bodyVelocity = nil
+    end
+    
+    if CONFIG.FLY_MODE then
+        pcall(function()
+            local char = localPlayer.Character
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    bodyVelocity = Instance.new("BodyVelocity")
+                    bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
+                    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+                    bodyVelocity.Parent = root
+                    
+                    flyConnection = RunService.Heartbeat:Connect(function()
+                        if not CONFIG.FLY_MODE or not bodyVelocity then
+                            return
+                        end
+                        
+                        pcall(function()
+                            local camera = Workspace.CurrentCamera
+                            local moveVec = Vector3.new(0, 0, 0)
+                            
+                            if UserInputService:IsKeyDown(Enum.KeyCode.W) then 
+                                moveVec = moveVec + camera.CFrame.LookVector 
+                            end
+                            if UserInputService:IsKeyDown(Enum.KeyCode.S) then 
+                                moveVec = moveVec - camera.CFrame.LookVector 
+                            end
+                            if UserInputService:IsKeyDown(Enum.KeyCode.A) then 
+                                moveVec = moveVec - camera.CFrame.RightVector 
+                            end
+                            if UserInputService:IsKeyDown(Enum.KeyCode.D) then 
+                                moveVec = moveVec + camera.CFrame.RightVector 
+                            end
+                            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then 
+                                moveVec = moveVec + Vector3.new(0, 1, 0) 
+                            end
+                            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then 
+                                moveVec = moveVec - Vector3.new(0, 1, 0) 
+                            end
+                            
+                            bodyVelocity.Velocity = moveVec.Magnitude > 0 and moveVec.Unit * CONFIG.FLY_SPEED or Vector3.new(0, 0, 0)
+                        end)
+                    end)
+                    print("Fly Mode enabled")
+                end
+            end
+        end)
+    else
+        print("Fly Mode disabled")
+    end
+end
+
+local function setupGodMode()
+    if CONFIG.GOD_MODE then
+        pcall(function()
+            local char = localPlayer.Character
+            if char then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid.MaxHealth = math.huge
+                    humanoid.Health = math.huge
+                    print("God Mode enabled")
+                end
+            end
+        end)
+    end
+end
+
+local function setupInvisible()
+    pcall(function()
+        local char = localPlayer.Character
+        if char then
+            for _, part in pairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.Transparency = CONFIG.INVISIBLE and 1 or 0
+                elseif part:IsA("Decal") or part:IsA("Texture") then
+                    part.Transparency = CONFIG.INVISIBLE and 1 or 0
+                elseif part:IsA("Accessory") then
+                    local handle = part:FindFirstChild("Handle")
+                    if handle then handle.Transparency = CONFIG.INVISIBLE and 1 or 0 end
+                end
+            end
+            local head = char:FindFirstChild("Head")
+            if head then
+                local face = head:FindFirstChild("face")
+                if face then face.Transparency = CONFIG.INVISIBLE and 1 or 0 end
+            end
+            print("Invisible:", CONFIG.INVISIBLE)
+        end
+    end)
+end
+
+local function setupAntiAFK()
+    if antiAFKConnection then 
+        pcall(function() task.cancel(antiAFKConnection) end)
+    end
+    antiAFKConnection = nil
+    
+    if CONFIG.ANTI_AFK then
+        antiAFKConnection = task.spawn(function()
+            while CONFIG.ANTI_AFK do
+                task.wait(30)
+                pcall(function()
+                    local char = localPlayer.Character
+                    if char then
+                        local humanoid = char:FindFirstChildOfClass("Humanoid")
+                        if humanoid then
+                            humanoid:Move(Vector3.new(0.1, 0, 0))
+                            task.wait(0.1)
+                            humanoid:Move(Vector3.new(-0.1, 0, 0))
+                        end
+                    end
+                end)
+            end
+        end)
+        print("Anti-AFK enabled")
+    else
+        print("Anti-AFK disabled")
+    end
+end
+
+local function onCharacterAdded(character)
+    print("Character added:", character.Name)
+    task.wait(1)
+    setupSpeedBoost()
+    setupGodMode()
+    setupInvisible()
+    setupNoclip()
+    setupFlyMode()
+    setupAntiAFK()
+end
 
 local function getCategory(obj)
     if not obj or not obj.Name then return nil end
-    
     local n = safeLower(obj.Name)
     
-    if Players:GetPlayerFromCharacter(obj) then
-        return "PLAYER"
-    end
+    -- Player check
+    if Players:GetPlayerFromCharacter(obj) then return "PLAYER" end
     
-    -- Check flowers first
+    -- Special categories first
     for _, keyword in ipairs(SETS.FLOWER) do
-        if n:find(keyword) then
-            return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil
-        end
+        if n:find(keyword) then return CONFIG.SHOW_FLOWERS and "RESOURCE" or nil end
     end
-    
-    -- Check sticks first
     for _, keyword in ipairs(SETS.STICK) do
-        if n:find(keyword) then
-            return CONFIG.SHOW_STICKS and "RESOURCE" or nil
-        end
+        if n:find(keyword) then return CONFIG.SHOW_STICKS and "RESOURCE" or nil end
     end
     
-    -- Check other categories
+    -- Regular categories
     for category, keywords in pairs(SETS) do
         if category ~= "FLOWER" and category ~= "STICK" then
             for _, keyword in ipairs(keywords) do
-                if n:find(keyword) then
-                    return category
-                end
+                if n:find(keyword) then return category end
             end
         end
     end
     
-    if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then
-        return "ITEM"
+    -- Object type checks
+    if obj:IsA("Tool") or (obj:IsA("Model") and obj:FindFirstChild("Handle")) then 
+        return "ITEM" 
     end
-    
-    if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
-        return "NPC"
+    if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then 
+        return "NPC" 
     end
     
     return nil
 end
-
---=============================
--- ESP System
---=============================
 
 local function createESP(obj, category)
     if not obj or not category then return end
     
-    local mainPart = getMainPart(obj)
-    if not mainPart then return end
+    pcall(function()
+        local mainPart = getMainPart(obj)
+        if not mainPart then return end
 
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "ESPBillboard"
-    bb.Size = UDim2.new(0, 200, 0, 32)
-    bb.StudsOffset = Vector3.new(0, 3, 0)
-    bb.AlwaysOnTop = true
-    bb.MaxDistance = CONFIG.MAX_DISPLAY_DISTANCE
-    bb.LightInfluence = 0
-    bb.Adornee = mainPart
-    bb.Parent = mainPart
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "ESPBillboard"
+        bb.Size = UDim2.new(0, 200, 0, 32)
+        bb.StudsOffset = Vector3.new(0, 3, 0)
+        bb.AlwaysOnTop = true
+        bb.MaxDistance = CONFIG.MAX_DISPLAY_DISTANCE
+        bb.LightInfluence = 0
+        bb.Adornee = mainPart
+        bb.Parent = mainPart
 
-    local tl = Instance.new("TextLabel")
-    tl.Size = UDim2.new(1, 0, 1, 0)
-    tl.BackgroundTransparency = 1
-    tl.TextScaled = true
-    tl.Font = Enum.Font.GothamSemibold
-    tl.TextStrokeTransparency = 0.2
-    tl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    tl.TextColor3 = colorFor(obj.Name, category)
-    tl.Parent = bb
+        local tl = Instance.new("TextLabel")
+        tl.Size = UDim2.new(1, 0, 1, 0)
+        tl.BackgroundTransparency = 1
+        tl.TextScaled = true
+        tl.Font = Enum.Font.GothamSemibold
+        tl.TextStrokeTransparency = 0.2
+        tl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        tl.TextColor3 = colorFor(obj.Name, category)
+        tl.Parent = bb
 
-    local displayText = ""
-    if category == "CHEST" then
-        if not chestIdByObject[obj] then
-            chestCounter += 1
-            chestIdByObject[obj] = chestCounter
-        end
-        displayText = ("Chest #%d"):format(chestIdByObject[obj])
-    elseif category == "CAMP" then
-        if not campIdByObject[obj] then
-            campCounter += 1
-            campIdByObject[obj] = campCounter
-        end
-        displayText = ("Camp #%d"):format(campIdByObject[obj])
-    elseif category == "PLAYER" then
-        local plr = Players:GetPlayerFromCharacter(obj)
-        displayText = plr and plr.Name or "Player"
-    else
-        displayText = obj.Name or "Unknown"
-    end
-    
-    tl.Text = displayText
-    objectData[obj] = {billboard = bb, label = tl, category = category, mainPart = mainPart}
-    
-    local connection
-    connection = obj.AncestryChanged:Connect(function()
-        if not obj.Parent then
-            if connection then connection:Disconnect() end
-            if objectData[obj] then
-                pcall(function() objectData[obj].billboard:Destroy() end)
-                objectData[obj] = nil
+        local distLabel = Instance.new("TextLabel")
+        distLabel.Size = UDim2.new(1, 0, 0.4, 0)
+        distLabel.Position = UDim2.new(0, 0, 0.6, 0)
+        distLabel.BackgroundTransparency = 1
+        distLabel.TextScaled = true
+        distLabel.Font = Enum.Font.Gotham
+        distLabel.TextStrokeTransparency = 0.2
+        distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        distLabel.Parent = bb
+
+        local displayText = ""
+        if category == "CHEST" then
+            if not chestIdByObject[obj] then
+                chestCounter = chestCounter + 1
+                chestIdByObject[obj] = chestCounter
             end
+            displayText = ("Chest #%d"):format(chestIdByObject[obj])
+        elseif category == "CAMP" then
+            if not campIdByObject[obj] then
+                campCounter = campCounter + 1
+                campIdByObject[obj] = campCounter
+            end
+            displayText = ("Camp #%d"):format(campIdByObject[obj])
+        elseif category == "PLAYER" then
+            local plr = Players:GetPlayerFromCharacter(obj)
+            displayText = plr and plr.Name or "Player"
+        else
+            displayText = obj.Name or "Unknown"
         end
+        
+        tl.Text = displayText
+        objectData[obj] = {
+            billboard = bb, 
+            label = tl, 
+            distLabel = distLabel, 
+            category = category, 
+            mainPart = mainPart
+        }
+        
+        -- Safe connection setup
+        local conn = obj.AncestryChanged:Connect(function()
+            if not obj.Parent then
+                safeDisconnect(conn)
+                if objectData[obj] then
+                    pcall(function() 
+                        if objectData[obj].billboard then
+                            objectData[obj].billboard:Destroy() 
+                        end
+                    end)
+                    objectData[obj] = nil
+                end
+            end
+        end)
+        
+        print("ESP created for:", obj.Name, "Category:", category)
     end)
 end
 
@@ -402,973 +518,951 @@ local function removeESP(obj)
 end
 
 local function registerObject(obj)
-    if destroyed or not obj or not obj.Parent then return end
-    if objectData[obj] then return end
+    if destroyed or not obj or not obj.Parent or objectData[obj] then return end
     
-    local category = getCategory(obj)
-    if not category then return end
-    
-    pcall(createESP, obj, category)
+    pcall(function()
+        local category = getCategory(obj)
+        if category then 
+            createESP(obj, category) 
+        end
+    end)
 end
 
 local function unregisterObject(obj)
-    if not obj then return end
-    removeESP(obj)
+    if obj then 
+        removeESP(obj) 
+    end
 end
 
--- Initial registration
+-- Initialize ESP
+print("Initializing ESP...")
 task.spawn(function()
-    for _, obj in ipairs(Workspace:GetChildren()) do
-        registerObject(obj)
-        for _, child in ipairs(obj:GetChildren()) do
-            registerObject(child)
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetChildren()) do
+            registerObject(obj)
+            for _, child in ipairs(obj:GetDescendants()) do 
+                registerObject(child) 
+            end
         end
-    end
+    end)
+    print("ESP initialization complete")
 end)
 
--- Event listeners
-table.insert(connections, Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(registerObject, obj)
-end))
+-- Event connections with safe handling
+local function connectWorkspaceEvents()
+    local success1, conn1 = pcall(function()
+        return Workspace.DescendantAdded:Connect(function(obj) 
+            task.defer(registerObject, obj) 
+        end)
+    end)
+    if success1 then table.insert(connections, conn1) end
 
-table.insert(connections, Workspace.DescendantRemoving:Connect(unregisterObject))
+    local success2, conn2 = pcall(function()
+        return Workspace.DescendantRemoving:Connect(unregisterObject)
+    end)
+    if success2 then table.insert(connections, conn2) end
+end
 
--- ESP update loop
+connectWorkspaceEvents()
+
+-- ESP Update Loop
 local lastESPUpdate = 0
-table.insert(connections, RunService.Heartbeat:Connect(function()
+local espUpdateConnection = RunService.Heartbeat:Connect(function()
     if destroyed then return end
     
     local now = tick()
-    if now - lastESPUpdate < CONSTANTS.ESP_UPDATE_INTERVAL then return end
+    if now - lastESPUpdate < 0.1 then return end
     lastESPUpdate = now
     
-    for obj, data in pairs(objectData) do
-        if not obj or not obj.Parent then
-            task.defer(unregisterObject, obj)
-            continue
-        end
+    pcall(function()
+        local char = localPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
         
-        local cat = data.category
-        local shouldShow = CONFIG.ENABLED and (
-            (cat == "CHEST" and CONFIG.SHOW_CHESTS) or
-            (cat == "ITEM" and CONFIG.SHOW_ITEMS) or
-            (cat == "RESOURCE" and CONFIG.SHOW_RESOURCES) or
-            (cat == "PLAYER" and CONFIG.SHOW_PLAYERS) or
-            (cat == "NPC" and CONFIG.SHOW_NPCS) or
-            (cat == "MOB" and CONFIG.SHOW_MOBS) or
-            (cat == "CAMP" and CONFIG.SHOW_CAMPS)
-        )
-        
-        local shouldShowName = shouldShow and (
-            (cat == "CHEST" and CONFIG.SHOW_CHEST_NAMES) or
-            (cat == "ITEM" and CONFIG.SHOW_ITEM_NAMES) or
-            (cat == "RESOURCE" and CONFIG.SHOW_RESOURCE_NAMES) or
-            (cat == "PLAYER" and CONFIG.SHOW_PLAYER_NAMES) or
-            (cat == "NPC" and CONFIG.SHOW_NPC_NAMES) or
-            (cat == "MOB" and CONFIG.SHOW_MOB_NAMES) or
-            (cat == "CAMP" and CONFIG.SHOW_CAMP_NAMES)
-        )
-        
-        if data.billboard then
-            data.billboard.Enabled = shouldShow
-            if data.label then
-                data.label.Visible = shouldShowName
-                if shouldShow then
-                    data.label.TextColor3 = colorFor(obj.Name, cat)
-                end
-            end
-        end
-    end
-end))
-
---=============================
--- MODERN SIDEBAR GUI
---=============================
-
-screenGui = Instance.new("ScreenGui")
-screenGui.Name = "NoctisUtility"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = playerGui
-
--- Main Frame
-mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.fromOffset(600, 400)
-mainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
-mainFrame.BackgroundColor3 = COLORS.background
-mainFrame.BorderSizePixel = 0
-mainFrame.Parent = screenGui
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
-
--- Sidebar
-sidebar = Instance.new("Frame")
-sidebar.Size = UDim2.fromOffset(150, 400)
-sidebar.Position = UDim2.fromOffset(0, 0)
-sidebar.BackgroundColor3 = COLORS.sidebar
-sidebar.BorderSizePixel = 0
-sidebar.Parent = mainFrame
-Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 8)
-
--- Title
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -10, 0, 30)
-title.Position = UDim2.fromOffset(5, 10)
-title.BackgroundTransparency = 1
-title.Text = "World > Local Player"
-title.TextColor3 = COLORS.textSub
-title.TextSize = 12
-title.Font = Enum.Font.Gotham
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = sidebar
-
--- Content Frame
-contentFrame = Instance.new("ScrollingFrame")
-contentFrame.Size = UDim2.fromOffset(440, 360)
-contentFrame.Position = UDim2.fromOffset(155, 30)
-contentFrame.BackgroundColor3 = COLORS.content
-contentFrame.BorderSizePixel = 0
-contentFrame.ScrollBarThickness = 4
-contentFrame.ScrollBarImageColor3 = COLORS.accent
-contentFrame.Parent = mainFrame
-Instance.new("UICorner", contentFrame).CornerRadius = UDim.new(0, 6)
-
---=============================
--- GUI FACTORY FUNCTIONS
---=============================
-
--- Toggle Factory
-local function createToggle(labelText, defaultValue, onChange, parent)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(1, -20, 0, 30)
-    container.BackgroundTransparency = 1
-    container.Parent = parent or contentFrame
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -60, 1, 0)
-    label.Position = UDim2.fromOffset(10, 0)
-    label.BackgroundTransparency = 1
-    label.Text = labelText
-    label.TextColor3 = COLORS.text
-    label.TextSize = 14
-    label.Font = Enum.Font.Gotham
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = container
-
-    local toggle = Instance.new("TextButton")
-    toggle.Size = UDim2.fromOffset(40, 20)
-    toggle.Position = UDim2.new(1, -50, 0.5, -10)
-    toggle.BackgroundColor3 = defaultValue and COLORS.accent or Color3.fromRGB(60, 60, 60)
-    toggle.BorderSizePixel = 0
-    toggle.Text = ""
-    toggle.Parent = container
-    Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 10)
-
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.fromOffset(16, 16)
-    knob.Position = defaultValue and UDim2.new(1, -18, 0.5, -8) or UDim2.fromOffset(2, 2)
-    knob.BackgroundColor3 = COLORS.text
-    knob.BorderSizePixel = 0
-    knob.Parent = toggle
-    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-    local state = defaultValue
-    toggle.MouseButton1Click:Connect(function()
-        state = not state
-        
-        local bgTween = TweenService:Create(toggle, TweenInfo.new(0.2), {
-            BackgroundColor3 = state and COLORS.accent or Color3.fromRGB(60, 60, 60)
-        })
-        local knobTween = TweenService:Create(knob, TweenInfo.new(0.2), {
-            Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.fromOffset(2, 2)
-        })
-        
-        bgTween:Play()
-        knobTween:Play()
-        pcall(onChange, state)
-    end)
-
-    return container
-end
-
--- Category Button Factory
-local function createCategoryButton(text, icon, category, parent)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -10, 0, 35)
-    btn.BackgroundColor3 = currentCategory == category and COLORS.accent or Color3.fromRGB(0, 0, 0, 0)
-    btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.Parent = parent or sidebar
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-
-    local iconLabel = Instance.new("TextLabel")
-    iconLabel.Size = UDim2.fromOffset(20, 20)
-    iconLabel.Position = UDim2.fromOffset(15, 7)
-    iconLabel.BackgroundTransparency = 1
-    iconLabel.Text = icon
-    iconLabel.TextColor3 = currentCategory == category and COLORS.text or COLORS.textSub
-    iconLabel.TextSize = 16
-    iconLabel.Font = Enum.Font.GothamSemibold
-    iconLabel.Parent = btn
-
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(1, -50, 1, 0)
-    textLabel.Position = UDim2.fromOffset(40, 0)
-    textLabel.BackgroundTransparency = 1
-    textLabel.Text = text
-    textLabel.TextColor3 = currentCategory == category and COLORS.text or COLORS.textSub
-    textLabel.TextSize = 14
-    textLabel.Font = Enum.Font.Gotham
-    textLabel.TextXAlignment = Enum.TextXAlignment.Left
-    textLabel.Parent = btn
-
-    return btn, iconLabel, textLabel
-end
-
--- Slider Factory
-local function createSlider(labelText, minVal, maxVal, defaultVal, onChange, parent)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(1, -20, 0, 50)
-    container.BackgroundTransparency = 1
-    container.Parent = parent or contentFrame
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 0, 20)
-    label.Position = UDim2.fromOffset(10, 0)
-    label.BackgroundTransparency = 1
-    label.Text = labelText
-    label.TextColor3 = COLORS.text
-    label.TextSize = 14
-    label.Font = Enum.Font.Gotham
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = container
-
-    local valueLabel = Instance.new("TextLabel")
-    valueLabel.Size = UDim2.fromOffset(50, 20)
-    valueLabel.Position = UDim2.new(1, -60, 0, 0)
-    valueLabel.BackgroundTransparency = 1
-    valueLabel.Text = tostring(defaultVal)
-    valueLabel.TextColor3 = COLORS.accent
-    valueLabel.TextSize = 14
-    valueLabel.Font = Enum.Font.GothamBold
-    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
-    valueLabel.Parent = container
-
-    local sliderBg = Instance.new("Frame")
-    sliderBg.Size = UDim2.new(1, -20, 0, 6)
-    sliderBg.Position = UDim2.fromOffset(10, 30)
-    sliderBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    sliderBg.BorderSizePixel = 0
-    sliderBg.Parent = container
-    Instance.new("UICorner", sliderBg).CornerRadius = UDim.new(0, 3)
-
-    local sliderFill = Instance.new("Frame")
-    sliderFill.Size = UDim2.new((defaultVal - minVal) / (maxVal - minVal), 0, 1, 0)
-    sliderFill.BackgroundColor3 = COLORS.accent
-    sliderFill.BorderSizePixel = 0
-    sliderFill.Parent = sliderBg
-    Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(0, 3)
-
-    local sliderBtn = Instance.new("TextButton")
-    sliderBtn.Size = UDim2.fromOffset(16, 16)
-    sliderBtn.Position = UDim2.new((defaultVal - minVal) / (maxVal - minVal), -8, 0.5, -8)
-    sliderBtn.BackgroundColor3 = COLORS.text
-    sliderBtn.BorderSizePixel = 0
-    sliderBtn.Text = ""
-    sliderBtn.Parent = sliderBg
-    Instance.new("UICorner", sliderBtn).CornerRadius = UDim.new(1, 0)
-
-    local dragging = false
-    sliderBtn.MouseButton1Down:Connect(function()
-        dragging = true
-    end)
-
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local mouse = Players.LocalPlayer:GetMouse()
-            local relativeX = mouse.X - sliderBg.AbsolutePosition.X
-            local percentage = math.clamp(relativeX / sliderBg.AbsoluteSize.X, 0, 1)
-            
-            local value = math.floor(minVal + (maxVal - minVal) * percentage)
-            valueLabel.Text = tostring(value)
-            
-            sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
-            sliderBtn.Position = UDim2.new(percentage, -8, 0.5, -8)
-            
-            pcall(onChange, value)
-        end
-    end)
-
-    return container
-end
-
--- Button Factory
-local function createButton(text, color, onClick, parent)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -20, 0, 35)
-    btn.Position = UDim2.fromOffset(10, 0)
-    btn.BackgroundColor3 = color
-    btn.BorderSizePixel = 0
-    btn.TextColor3 = COLORS.text
-    btn.Text = text
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 14
-    btn.Parent = parent or contentFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-
-    btn.MouseButton1Click:Connect(onClick)
-    return btn
-end
-
---=============================
--- SIDEBAR CATEGORIES (FIXED ICONS)
---=============================
-
-local categoryButtons = {}
--- FIXED: Replaced Unicode icons with ASCII characters
-local categories = {
-    {name = "Visual", icon = "V", category = "Visual"},
-    {name = "Player", icon = "P", category = "Player"},
-    {name = "Teleport", icon = "T", category = "Teleport"},
-    {name = "Misc", icon = "M", category = "Misc"}
-}
-
-local yPos = 50
-for _, cat in ipairs(categories) do
-    local btn, icon, text = createCategoryButton(cat.name, cat.icon, cat.category)
-    btn.Position = UDim2.fromOffset(5, yPos)
-    categoryButtons[cat.category] = {btn = btn, icon = icon, text = text}
-    yPos = yPos + 40
-end
-
---=============================
--- CONTENT CREATION
---=============================
-
-local contentFrames = {}
-
--- Create content for each category
-local function createVisualContent()
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 0)
-    frame.BackgroundTransparency = 1
-    frame.Visible = true
-    frame.Parent = contentFrame
-    
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 5)
-    layout.Parent = frame
-    
-    -- Conditions Header
-    local conditionsHeader = Instance.new("TextLabel")
-    conditionsHeader.Size = UDim2.new(1, -20, 0, 30)
-    conditionsHeader.BackgroundTransparency = 1
-    conditionsHeader.Text = "Conditions"
-    conditionsHeader.TextColor3 = COLORS.textSub
-    conditionsHeader.TextSize = 16
-    conditionsHeader.Font = Enum.Font.GothamBold
-    conditionsHeader.TextXAlignment = Enum.TextXAlignment.Left
-    conditionsHeader.LayoutOrder = 1
-    conditionsHeader.Parent = frame
-    
-    -- ESP Toggles
-    createToggle("God Mode", false, function(v) end).LayoutOrder = 2
-    createToggle("Semi God Mode", false, function(v) end).LayoutOrder = 3
-    createToggle("Invisible", false, function(v) end).LayoutOrder = 4
-    createToggle("Super Jump", false, function(v) end).LayoutOrder = 5
-    createToggle("Infinite Stamina", false, function(v) end).LayoutOrder = 6
-    createToggle("No Ragdoll", false, function(v) end).LayoutOrder = 7
-    createToggle("NoClip", false, function(v) end).LayoutOrder = 8
-    createToggle("Invisible NoClip", false, function(v) end).LayoutOrder = 9
-    createToggle("Run Speed", CONFIG.SPEED_BOOST, function(v) CONFIG.SPEED_BOOST = v setupSpeedBoost() end).LayoutOrder = 10
-    createToggle("Swim Speed", false, function(v) end).LayoutOrder = 11
-    createToggle("Never Wanted", false, function(v) end).LayoutOrder = 12
-    createToggle("No Collision", false, function(v) end).LayoutOrder = 13
-    
-    return frame
-end
-
-local function createPlayerContent()
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 0)
-    frame.BackgroundTransparency = 1
-    frame.Visible = false
-    frame.Parent = contentFrame
-    
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 5)
-    layout.Parent = frame
-    
-    -- Customization Header
-    local customHeader = Instance.new("TextLabel")
-    customHeader.Size = UDim2.new(1, -20, 0, 30)
-    customHeader.BackgroundTransparency = 1
-    customHeader.Text = "Customization"
-    customHeader.TextColor3 = COLORS.textSub
-    customHeader.TextSize = 16
-    customHeader.Font = Enum.Font.GothamBold
-    customHeader.TextXAlignment = Enum.TextXAlignment.Left
-    customHeader.LayoutOrder = 1
-    customHeader.Parent = frame
-    
-    -- Speed Sliders
-    createSlider("NoClip Speed", 1, 200, 100, function(v) end).LayoutOrder = 2
-    createSlider("Run Speed Multiplier", 1, 10, 1, function(v) CONFIG.SPEED_VALUE = v * 16 setupSpeedBoost() end).LayoutOrder = 3
-    createSlider("Swim Speed Multiplier", 1, 10, 1, function(v) end).LayoutOrder = 4
-    
-    -- Player toggles
-    createToggle("Show Players", CONFIG.SHOW_PLAYERS, function(v) CONFIG.SHOW_PLAYERS = v end).LayoutOrder = 5
-    createToggle("Player Names", CONFIG.SHOW_PLAYER_NAMES, function(v) CONFIG.SHOW_PLAYER_NAMES = v end).LayoutOrder = 6
-    
-    return frame
-end
-
-local function createTeleportContent()
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 0)
-    frame.BackgroundTransparency = 1
-    frame.Visible = false
-    frame.Parent = contentFrame
-    
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 10)
-    layout.Parent = frame
-    
-    -- Header
-    local teleportHeader = Instance.new("TextLabel")
-    teleportHeader.Size = UDim2.new(1, -20, 0, 30)
-    teleportHeader.BackgroundTransparency = 1
-    teleportHeader.Text = "Teleportation"
-    teleportHeader.TextColor3 = COLORS.textSub
-    teleportHeader.TextSize = 16
-    teleportHeader.Font = Enum.Font.GothamBold
-    teleportHeader.TextXAlignment = Enum.TextXAlignment.Left
-    teleportHeader.LayoutOrder = 1
-    teleportHeader.Parent = frame
-    
-    -- Teleport buttons
-    createButton("Chest Teleport", COLORS.accent, function()
-        -- Create chest teleport window
-        local tpWindow = Instance.new("Frame")
-        tpWindow.Size = UDim2.fromOffset(350, 400)
-        tpWindow.Position = UDim2.fromOffset(650, 100)
-        tpWindow.BackgroundColor3 = COLORS.background
-        tpWindow.BorderSizePixel = 0
-        tpWindow.Parent = screenGui
-        Instance.new("UICorner", tpWindow).CornerRadius = UDim.new(0, 8)
-        
-        local tpHeader = Instance.new("Frame")
-        tpHeader.Size = UDim2.new(1, 0, 0, 40)
-        tpHeader.BackgroundColor3 = COLORS.sidebar
-        tpHeader.BorderSizePixel = 0
-        tpHeader.Parent = tpWindow
-        Instance.new("UICorner", tpHeader).CornerRadius = UDim.new(0, 8)
-        
-        local tpTitle = Instance.new("TextLabel")
-        tpTitle.Size = UDim2.new(1, -80, 1, 0)
-        tpTitle.Position = UDim2.new(0, 15, 0, 0)
-        tpTitle.BackgroundTransparency = 1
-        tpTitle.Text = "Chest Teleport"
-        tpTitle.TextColor3 = COLORS.text
-        tpTitle.TextSize = 14
-        tpTitle.Font = Enum.Font.GothamBold
-        tpTitle.TextXAlignment = Enum.TextXAlignment.Left
-        tpTitle.Parent = tpHeader
-        
-        local closeBtn = Instance.new("TextButton")
-        closeBtn.Size = UDim2.fromOffset(60, 25)
-        closeBtn.Position = UDim2.new(1, -70, 0, 7)
-        closeBtn.BackgroundColor3 = COLORS.danger
-        closeBtn.BorderSizePixel = 0
-        closeBtn.TextColor3 = COLORS.text
-        closeBtn.Text = "Close"
-        closeBtn.Font = Enum.Font.GothamSemibold
-        closeBtn.TextSize = 12
-        closeBtn.Parent = tpHeader
-        Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 4)
-        
-        closeBtn.MouseButton1Click:Connect(function()
-            tpWindow:Destroy()
-        end)
-        
-        local tpList = Instance.new("ScrollingFrame")
-        tpList.Size = UDim2.new(1, -20, 1, -60)
-        tpList.Position = UDim2.new(0, 10, 0, 50)
-        tpList.ScrollBarThickness = 4
-        tpList.ScrollBarImageColor3 = COLORS.accent
-        tpList.BackgroundTransparency = 1
-        tpList.BorderSizePixel = 0
-        tpList.Parent = tpWindow
-        
-        local function refreshChestList()
-            for _, child in ipairs(tpList:GetChildren()) do
-                if child:IsA("GuiObject") then
-                    child:Destroy()
-                end
+        for obj, data in pairs(objectData) do
+            if not obj or not obj.Parent then
+                task.defer(unregisterObject, obj)
+                continue
             end
             
-            local listOffset = 0
-            local chestCount = 0
+            local cat = data.category
+            local shouldShow = CONFIG.ENABLED and (
+                (cat == "CHEST" and CONFIG.SHOW_CHESTS) or
+                (cat == "ITEM" and CONFIG.SHOW_ITEMS) or
+                (cat == "RESOURCE" and CONFIG.SHOW_RESOURCES) or
+                (cat == "PLAYER" and CONFIG.SHOW_PLAYERS) or
+                (cat == "NPC" and CONFIG.SHOW_NPCS) or
+                (cat == "MOB" and CONFIG.SHOW_MOBS) or
+                (cat == "CAMP" and CONFIG.SHOW_CAMPS)
+            )
             
-            for obj, data in pairs(objectData) do
-                if data.category == "CHEST" and obj and obj.Parent then
-                    chestCount = chestCount + 1
-                    
-                    local btn = Instance.new("TextButton")
-                    btn.Size = UDim2.new(1, -8, 0, 35)
-                    btn.Position = UDim2.new(0, 4, 0, listOffset)
-                    btn.BackgroundColor3 = COLORS.content
-                    btn.BorderSizePixel = 0
-                    btn.TextColor3 = COLORS.text
-                    
-                    local distance = "Unknown"
-                    local char = localPlayer.Character
-                    if char and char:FindFirstChild("HumanoidRootPart") then
-                        local mainPart = getMainPart(obj)
-                        if mainPart then
-                            local dist = (char.HumanoidRootPart.Position - mainPart.Position).Magnitude
-                            distance = math.floor(dist) .. "m"
-                        end
-                    end
-                    
-                    btn.Text = string.format("%s - %s", data.label and data.label.Text or "Chest", distance)
-                    btn.Font = Enum.Font.GothamSemibold
-                    btn.TextSize = 12
-                    btn.Parent = tpList
-                    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-
-                    btn.MouseButton1Click:Connect(function()
-                        local character = localPlayer.Character
-                        local root = character and character:FindFirstChild("HumanoidRootPart")
-                        local targetPart = getMainPart(obj)
-                        
-                        if root and targetPart then
-                            local success = stepTeleport(root, targetPart.Position)
-                            if success then
-                                btn.BackgroundColor3 = COLORS.success
-                                btn.Text = "Teleported!"
-                                task.wait(1)
-                                tpWindow:Destroy()
-                            else
-                                btn.BackgroundColor3 = COLORS.danger
-                                btn.Text = "Failed!"
-                                task.wait(1)
-                                btn.BackgroundColor3 = COLORS.content
-                            end
-                        end
-                    end)
-
-                    listOffset = listOffset + 40
-                end
-            end
+            local shouldShowName = shouldShow and (
+                (cat == "CHEST" and CONFIG.SHOW_CHEST_NAMES) or
+                (cat == "ITEM" and CONFIG.SHOW_ITEM_NAMES) or
+                (cat == "RESOURCE" and CONFIG.SHOW_RESOURCE_NAMES) or
+                (cat == "PLAYER" and CONFIG.SHOW_PLAYER_NAMES) or
+                (cat == "NPC" and CONFIG.SHOW_NPC_NAMES) or
+                (cat == "MOB" and CONFIG.SHOW_MOB_NAMES) or
+                (cat == "CAMP" and CONFIG.SHOW_CAMP_NAMES)
+            )
             
-            if chestCount == 0 then
-                local noChestsLabel = Instance.new("TextLabel")
-                noChestsLabel.Size = UDim2.new(1, -8, 0, 30)
-                noChestsLabel.Position = UDim2.new(0, 4, 0, 10)
-                noChestsLabel.BackgroundTransparency = 1
-                noChestsLabel.Text = "No chests found"
-                noChestsLabel.TextColor3 = COLORS.textSub
-                noChestsLabel.TextSize = 12
-                noChestsLabel.Font = Enum.Font.Gotham
-                noChestsLabel.Parent = tpList
-                listOffset = 50
-            end
-            
-            tpList.CanvasSize = UDim2.new(0, 0, 0, listOffset + 10)
-        end
-        
-        refreshChestList()
-        
-        -- Auto refresh
-        local refreshConnection
-        refreshConnection = RunService.Stepped:Connect(function()
-            if tpWindow.Parent then
-                refreshChestList()
-            else
-                refreshConnection:Disconnect()
-            end
-        end)
-    end).LayoutOrder = 2
-    
-    createButton("Spawn Teleport", COLORS.accent, function()
-        local character = localPlayer.Character
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-        
-        if root then
-            stepTeleport(root, spawnPoint)
-        end
-    end).LayoutOrder = 3
-    
-    return frame
-end
-
-local function createMiscContent()
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 0)
-    frame.BackgroundTransparency = 1
-    frame.Visible = false
-    frame.Parent = contentFrame
-    
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 10)
-    layout.Parent = frame
-    
-    -- Header
-    local miscHeader = Instance.new("TextLabel")
-    miscHeader.Size = UDim2.new(1, -20, 0, 30)
-    miscHeader.BackgroundTransparency = 1
-    miscHeader.Text = "Miscellaneous"
-    miscHeader.TextColor3 = COLORS.textSub
-    miscHeader.TextSize = 16
-    miscHeader.Font = Enum.Font.GothamBold
-    miscHeader.TextXAlignment = Enum.TextXAlignment.Left
-    miscHeader.LayoutOrder = 1
-    miscHeader.Parent = frame
-    
-    -- FIXED: ESP Settings Section with proper container
-    local espSection = Instance.new("Frame")
-    espSection.Size = UDim2.new(1, -20, 0, 320)
-    espSection.Position = UDim2.fromOffset(10, 0)
-    espSection.BackgroundColor3 = COLORS.content
-    espSection.BorderSizePixel = 0
-    espSection.LayoutOrder = 2
-    espSection.Parent = frame
-    Instance.new("UICorner", espSection).CornerRadius = UDim.new(0, 6)
-    
-    local espLayout = Instance.new("UIListLayout")
-    espLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    espLayout.Padding = UDim.new(0, 5)
-    espLayout.Parent = espSection
-    
-    local espLabel = Instance.new("TextLabel")
-    espLabel.Size = UDim2.new(1, -20, 0, 25)
-    espLabel.Position = UDim2.fromOffset(10, 5)
-    espLabel.BackgroundTransparency = 1
-    espLabel.Text = "ESP Settings"
-    espLabel.TextColor3 = COLORS.text
-    espLabel.TextSize = 14
-    espLabel.Font = Enum.Font.GothamBold
-    espLabel.TextXAlignment = Enum.TextXAlignment.Left
-    espLabel.LayoutOrder = 1
-    espLabel.Parent = espSection
-    
-    -- ESP Toggles
-    createToggle("Enable ESP", CONFIG.ENABLED, function(v) CONFIG.ENABLED = v end, espSection).LayoutOrder = 2
-    createToggle("Show Chests", CONFIG.SHOW_CHESTS, function(v) CONFIG.SHOW_CHESTS = v end, espSection).LayoutOrder = 3
-    createToggle("Show Items", CONFIG.SHOW_ITEMS, function(v) CONFIG.SHOW_ITEMS = v end, espSection).LayoutOrder = 4
-    createToggle("Show Resources", CONFIG.SHOW_RESOURCES, function(v) CONFIG.SHOW_RESOURCES = v end, espSection).LayoutOrder = 5
-    createToggle("Show NPCs", CONFIG.SHOW_NPCS, function(v) CONFIG.SHOW_NPCS = v end, espSection).LayoutOrder = 6
-    createToggle("Show Mobs", CONFIG.SHOW_MOBS, function(v) CONFIG.SHOW_MOBS = v end, espSection).LayoutOrder = 7
-    createToggle("Show Camps", CONFIG.SHOW_CAMPS, function(v) CONFIG.SHOW_CAMPS = v end, espSection).LayoutOrder = 8
-    createToggle("Infinite Jump", CONFIG.INFINITE_JUMP, function(v) CONFIG.INFINITE_JUMP = v setupInfiniteJump() end, espSection).LayoutOrder = 9
-    
-    -- Speed Slider
-    createSlider("Speed Value", 16, 200, CONFIG.SPEED_VALUE, function(v) CONFIG.SPEED_VALUE = v setupSpeedBoost() end, espSection).LayoutOrder = 10
-    
-    -- FIXED: Script Control Section with proper styling
-    local scriptSection = Instance.new("Frame")
-    scriptSection.Size = UDim2.new(1, -20, 0, 100)
-    scriptSection.Position = UDim2.fromOffset(10, 0)
-    scriptSection.BackgroundColor3 = Color3.fromRGB(40, 25, 25)
-    scriptSection.BorderSizePixel = 0
-    scriptSection.LayoutOrder = 3
-    scriptSection.Parent = frame
-    Instance.new("UICorner", scriptSection).CornerRadius = UDim.new(0, 6)
-    
-    local scriptLayout = Instance.new("UIListLayout")
-    scriptLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    scriptLayout.Padding = UDim.new(0, 5)
-    scriptLayout.Parent = scriptSection
-    
-    local scriptLabel = Instance.new("TextLabel")
-    scriptLabel.Size = UDim2.new(1, -20, 0, 25)
-    scriptLabel.Position = UDim2.fromOffset(10, 5)
-    scriptLabel.BackgroundTransparency = 1
-    scriptLabel.Text = "Script Control"
-    scriptLabel.TextColor3 = COLORS.warning
-    scriptLabel.TextSize = 14
-    scriptLabel.Font = Enum.Font.GothamBold
-    scriptLabel.TextXAlignment = Enum.TextXAlignment.Left
-    scriptLabel.LayoutOrder = 1
-    scriptLabel.Parent = scriptSection
-    
-    -- FIXED: Uninject Button with proper styling and functionality
-    local uninjectBtn = Instance.new("TextButton")
-    uninjectBtn.Size = UDim2.new(1, -20, 0, 50)
-    uninjectBtn.Position = UDim2.fromOffset(10, 30)
-    uninjectBtn.BackgroundColor3 = COLORS.danger
-    uninjectBtn.BorderSizePixel = 0
-    uninjectBtn.TextColor3 = COLORS.text
-    uninjectBtn.Text = "Remove Noctis Utility"
-    uninjectBtn.Font = Enum.Font.GothamBold
-    uninjectBtn.TextSize = 14
-    uninjectBtn.LayoutOrder = 2
-    uninjectBtn.Parent = scriptSection
-    Instance.new("UICorner", uninjectBtn).CornerRadius = UDim.new(0, 6)
-    
-    -- Hover effects
-    uninjectBtn.MouseEnter:Connect(function()
-        local tween = TweenService:Create(uninjectBtn, TweenInfo.new(0.2), {
-            BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-        })
-        tween:Play()
-    end)
-    
-    uninjectBtn.MouseLeave:Connect(function()
-        local tween = TweenService:Create(uninjectBtn, TweenInfo.new(0.2), {
-            BackgroundColor3 = COLORS.danger
-        })
-        tween:Play()
-    end)
-    
-    -- FIXED: Proper uninject functionality with confirmation dialog
-    uninjectBtn.MouseButton1Click:Connect(function()
-        local confirmFrame = Instance.new("Frame")
-        confirmFrame.Size = UDim2.fromOffset(350, 150)
-        confirmFrame.Position = UDim2.new(0.5, -175, 0.5, -75)
-        confirmFrame.BackgroundColor3 = COLORS.background
-        confirmFrame.BorderSizePixel = 0
-        confirmFrame.Parent = screenGui
-        confirmFrame.ZIndex = 100
-        Instance.new("UICorner", confirmFrame).CornerRadius = UDim.new(0, 8)
-        
-        -- Shadow effect
-        local shadow = Instance.new("Frame")
-        shadow.Size = UDim2.new(1, 4, 1, 4)
-        shadow.Position = UDim2.fromOffset(-2, -2)
-        shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-        shadow.BackgroundTransparency = 0.7
-        shadow.BorderSizePixel = 0
-        shadow.ZIndex = 99
-        shadow.Parent = confirmFrame
-        Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 8)
-        
-        -- Header
-        local confirmHeader = Instance.new("Frame")
-        confirmHeader.Size = UDim2.new(1, 0, 0, 40)
-        confirmHeader.BackgroundColor3 = COLORS.sidebar
-        confirmHeader.BorderSizePixel = 0
-        confirmHeader.Parent = confirmFrame
-        Instance.new("UICorner", confirmHeader).CornerRadius = UDim.new(0, 8)
-        
-        local confirmTitle = Instance.new("TextLabel")
-        confirmTitle.Size = UDim2.new(1, -20, 1, 0)
-        confirmTitle.Position = UDim2.fromOffset(10, 0)
-        confirmTitle.BackgroundTransparency = 1
-        confirmTitle.Text = "Confirm Removal"
-        confirmTitle.TextColor3 = COLORS.warning
-        confirmTitle.TextSize = 16
-        confirmTitle.Font = Enum.Font.GothamBold
-        confirmTitle.TextXAlignment = Enum.TextXAlignment.Left
-        confirmTitle.Parent = confirmHeader
-        
-        -- Description
-        local confirmText = Instance.new("TextLabel")
-        confirmText.Size = UDim2.new(1, -20, 0, 50)
-        confirmText.Position = UDim2.fromOffset(10, 50)
-        confirmText.BackgroundTransparency = 1
-        confirmText.Text = "Are you sure you want to remove Noctis Utility?\nThis will disable all features and close the GUI."
-        confirmText.TextColor3 = COLORS.text
-        confirmText.TextSize = 12
-        confirmText.Font = Enum.Font.Gotham
-        confirmText.TextWrapped = true
-        confirmText.Parent = confirmFrame
-        
-        -- Button Container
-        local buttonContainer = Instance.new("Frame")
-        buttonContainer.Size = UDim2.new(1, -20, 0, 35)
-        buttonContainer.Position = UDim2.fromOffset(10, 105)
-        buttonContainer.BackgroundTransparency = 1
-        buttonContainer.Parent = confirmFrame
-        
-        -- Yes Button
-        local yesBtn = Instance.new("TextButton")
-        yesBtn.Size = UDim2.new(0.48, 0, 1, 0)
-        yesBtn.Position = UDim2.new(0, 0, 0, 0)
-        yesBtn.BackgroundColor3 = COLORS.danger
-        yesBtn.BorderSizePixel = 0
-        yesBtn.TextColor3 = COLORS.text
-        yesBtn.Text = "Yes, Remove"
-        yesBtn.TextSize = 12
-        yesBtn.Font = Enum.Font.GothamBold
-        yesBtn.Parent = buttonContainer
-        Instance.new("UICorner", yesBtn).CornerRadius = UDim.new(0, 4)
-        
-        -- No Button
-        local noBtn = Instance.new("TextButton")
-        noBtn.Size = UDim2.new(0.48, 0, 1, 0)
-        noBtn.Position = UDim2.new(0.52, 0, 0, 0)
-        noBtn.BackgroundColor3 = COLORS.success
-        noBtn.BorderSizePixel = 0
-        noBtn.TextColor3 = COLORS.text
-        noBtn.Text = "Cancel"
-        noBtn.TextSize = 12
-        noBtn.Font = Enum.Font.GothamBold
-        noBtn.Parent = buttonContainer
-        Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 4)
-        
-        -- Button Events
-        yesBtn.MouseButton1Click:Connect(function()
-            confirmFrame:Destroy()
-            
-            -- Fade out animation
-            local fadeOut = TweenService:Create(mainFrame, TweenInfo.new(0.5), {
-                BackgroundTransparency = 1
-            })
-            fadeOut:Play()
-            
-            fadeOut.Completed:Connect(function()
-                -- FIXED: Proper cleanup function
-                if destroyed then return end
-                destroyed = true
-
-                if jumpConnection then
-                    jumpConnection:Disconnect()
-                    jumpConnection = nil
-                end
-                
-                local character = localPlayer.Character
-                if character then
-                    local humanoid = character:FindFirstChildOfClass("Humanoid")
-                    if humanoid then
-                        humanoid.WalkSpeed = originalWalkSpeed
+            if data.billboard then
+                data.billboard.Enabled = shouldShow
+                if data.label then
+                    data.label.Visible = shouldShowName
+                    if shouldShow then 
+                        data.label.TextColor3 = colorFor(obj.Name, cat) 
                     end
                 end
-
-                -- Clean up all connections
-                for _, connection in ipairs(connections) do
-                    if connection and typeof(connection) == "RBXScriptConnection" and connection.Connected then
-                        pcall(function() connection:Disconnect() end)
-                    end
-                end
-                connections = {}
-
-                -- Clean up ESP objects
-                for obj, data in pairs(objectData) do
-                    pcall(function()
-                        if data.billboard and data.billboard.Parent then 
-                            data.billboard:Destroy() 
-                        end
-                    end)
-                end
                 
-                objectData = {}
-                chestIdByObject = setmetatable({}, {__mode="k"})
-                campIdByObject = setmetatable({}, {__mode="k"})
-                chestCounter, campCounter = 0, 0
-
-                if screenGui and screenGui.Parent then 
-                    pcall(function() screenGui:Destroy() end)
+                if data.distLabel and root and data.mainPart then
+                    local distance = (root.Position - data.mainPart.Position).Magnitude
+                    data.distLabel.Text = string.format("%.0fm", distance)
                 end
-                
-                print("Noctis Utility successfully removed!")
-            end)
-        end)
-        
-        noBtn.MouseButton1Click:Connect(function()
-            confirmFrame:Destroy()
-        end)
-    end)
-    
-    return frame
-end
-
--- Create all content frames
-contentFrames["Visual"] = createVisualContent()
-contentFrames["Player"] = createPlayerContent()
-contentFrames["Teleport"] = createTeleportContent()
-contentFrames["Misc"] = createMiscContent()
-
--- Category switching function
-local function switchCategory(category)
-    -- Update button states
-    for cat, data in pairs(categoryButtons) do
-        local isActive = cat == category
-        data.btn.BackgroundColor3 = isActive and COLORS.accent or Color3.fromRGB(0, 0, 0, 0)
-        data.icon.TextColor3 = isActive and COLORS.text or COLORS.textSub
-        data.text.TextColor3 = isActive and COLORS.text or COLORS.textSub
-    end
-    
-    -- Show/hide content frames
-    for cat, frame in pairs(contentFrames) do
-        frame.Visible = cat == category
-    end
-    
-    currentCategory = category
-end
-
--- Connect category buttons
-for category, data in pairs(categoryButtons) do
-    data.btn.MouseButton1Click:Connect(function()
-        switchCategory(category)
-    end)
-end
-
---=============================
--- DRAG FUNCTIONALITY
---=============================
-
-local dragToggle, dragInput, dragStart, startPos
-
-local function updateInput(input)
-    local delta = input.Position - dragStart
-    mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-end
-
-mainFrame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragToggle = true
-        dragStart = input.Position
-        startPos = mainFrame.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragToggle = false
             end
-        end)
-    end
+        end
+    end)
 end)
 
-mainFrame.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
+table.insert(connections, espUpdateConnection)
 
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragToggle then
-        updateInput(input)
-    end
-end)
-
---=============================
--- Movement Features Setup
---=============================
-
-if localPlayer.Character then
-    onCharacterAdded(localPlayer.Character)
+-- Character setup
+setupCharacter()
+if localPlayer.Character then 
+    onCharacterAdded(localPlayer.Character) 
 end
-localPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+local charConnection = localPlayer.CharacterAdded:Connect(onCharacterAdded)
+table.insert(connections, charConnection)
 
 setupInfiniteJump()
 setupSpeedBoost()
 
--- Initialize with Visual category
-switchCategory("Visual")
+-- Hydra UI Library Loader
+local function loadHydraUI()
+    local success, UILib = pcall(function()
+        return loadstring(game:HttpGet('https://raw.githubusercontent.com/weakhoes/Roblox-UI-Libs/refs/heads/main/Hydra%20Lib/Hydra%20Lib%20Source.lua'))()
+    end)
+    
+    if success and UILib and UILib.new then
+        print("Hydra UI loaded successfully!")
+        return UILib
+    else
+        warn("Failed to load Hydra UI:", tostring(UILib))
+        return nil
+    end
+end
 
-print("Noctis Utility Modern GUI loaded successfully!")
-print("FIXED: Unicode icons replaced with ASCII characters")
-print("FIXED: Uninject button in separate section with proper styling")
-print("FIXED: Better error handling throughout the script")
-print("All original ESP and movement features preserved")
-print("Drag the window to move it around")
-print("Ready to use!")
+-- Hydra UI Creation
+task.spawn(function()
+    task.wait(3)
+    
+    local UILib = loadHydraUI()
+    if UILib then
+        local success, result = pcall(function()
+            local Window = UILib.new("Noctis Utility V2", localPlayer.UserId, "Premium")
+            
+            -- ESP Category
+            local ESPCategory = Window:Category("ESP", "http://www.roblox.com/asset/?id=8395621517")
+            local ESPButton = ESPCategory:Button("ESP Settings", "http://www.roblox.com/asset/?id=8395747586")
+            local ESPSection = ESPButton:Section("ESP Controls", "Left")
+            
+            ESPSection:Toggle({
+                Title = "Enable ESP",
+                Description = "Toggle ESP on/off",
+                Default = CONFIG.ENABLED
+            }, function(value)
+                CONFIG.ENABLED = value
+                print("ESP toggled:", value)
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Chests",
+                Description = "Show chest ESP",
+                Default = CONFIG.SHOW_CHESTS
+            }, function(value)
+                CONFIG.SHOW_CHESTS = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Items",
+                Description = "Show item ESP",
+                Default = CONFIG.SHOW_ITEMS
+            }, function(value)
+                CONFIG.SHOW_ITEMS = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Resources",
+                Description = "Show resource ESP",
+                Default = CONFIG.SHOW_RESOURCES
+            }, function(value)
+                CONFIG.SHOW_RESOURCES = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Players",
+                Description = "Show player ESP",
+                Default = CONFIG.SHOW_PLAYERS
+            }, function(value)
+                CONFIG.SHOW_PLAYERS = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show NPCs",
+                Description = "Show NPC ESP",
+                Default = CONFIG.SHOW_NPCS
+            }, function(value)
+                CONFIG.SHOW_NPCS = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Mobs",
+                Description = "Show mob ESP",
+                Default = CONFIG.SHOW_MOBS
+            }, function(value)
+                CONFIG.SHOW_MOBS = value
+            end)
+            
+            ESPSection:Toggle({
+                Title = "Show Camps",
+                Description = "Show camp ESP",
+                Default = CONFIG.SHOW_CAMPS
+            }, function(value)
+                CONFIG.SHOW_CAMPS = value
+            end)
+            
+            ESPSection:Slider({
+                Title = "Max Distance",
+                Description = "Maximum ESP display distance",
+                Default = CONFIG.MAX_DISPLAY_DISTANCE,
+                Min = 100,
+                Max = 2000
+            }, function(value)
+                CONFIG.MAX_DISPLAY_DISTANCE = value
+            end)
+            
+            -- Movement Category
+            local MovementCategory = Window:Category("Movement", "http://www.roblox.com/asset/?id=8395621517")
+            local MovementButton = MovementCategory:Button("Movement Hacks", "http://www.roblox.com/asset/?id=8395747586")
+            local MovementSection = MovementButton:Section("Movement Controls", "Left")
+            
+            MovementSection:Toggle({
+                Title = "Speed Boost",
+                Description = "Increase walk speed",
+                Default = CONFIG.SPEED_BOOST
+            }, function(value)
+                CONFIG.SPEED_BOOST = value
+                setupSpeedBoost()
+            end)
+            
+            MovementSection:Slider({
+                Title = "Speed Value",
+                Description = "Walk speed multiplier",
+                Default = CONFIG.SPEED_VALUE,
+                Min = 16,
+                Max = 200
+            }, function(value)
+                CONFIG.SPEED_VALUE = value
+                if CONFIG.SPEED_BOOST then
+                    setupSpeedBoost()
+                end
+            end)
+            
+            MovementSection:Toggle({
+                Title = "NoClip",
+                Description = "Walk through walls",
+                Default = CONFIG.NOCLIP
+            }, function(value)
+                CONFIG.NOCLIP = value
+                setupNoclip()
+            end)
+            
+            MovementSection:Toggle({
+                Title = "Fly Mode",
+                Description = "Enable flying",
+                Default = CONFIG.FLY_MODE
+            }, function(value)
+                CONFIG.FLY_MODE = value
+                setupFlyMode()
+            end)
+            
+            MovementSection:Slider({
+                Title = "Fly Speed",
+                Description = "Flying speed",
+                Default = CONFIG.FLY_SPEED,
+                Min = 10,
+                Max = 200
+            }, function(value)
+                CONFIG.FLY_SPEED = value
+            end)
+            
+            MovementSection:Toggle({
+                Title = "Infinite Jump",
+                Description = "Jump infinitely",
+                Default = CONFIG.INFINITE_JUMP
+            }, function(value)
+                CONFIG.INFINITE_JUMP = value
+                setupInfiniteJump()
+            end)
+            
+            -- Player Category
+            local PlayerCategory = Window:Category("Player", "http://www.roblox.com/asset/?id=8395621517")
+            local PlayerButton = PlayerCategory:Button("Player Hacks", "http://www.roblox.com/asset/?id=8395747586")
+            local PlayerSection = PlayerButton:Section("Player Controls", "Left")
+            
+            PlayerSection:Toggle({
+                Title = "God Mode",
+                Description = "Infinite health",
+                Default = CONFIG.GOD_MODE
+            }, function(value)
+                CONFIG.GOD_MODE = value
+                setupGodMode()
+            end)
+            
+            PlayerSection:Toggle({
+                Title = "Invisible",
+                Description = "Make character invisible",
+                Default = CONFIG.INVISIBLE
+            }, function(value)
+                CONFIG.INVISIBLE = value
+                setupInvisible()
+            end)
+            
+            PlayerSection:Toggle({
+                Title = "Anti-AFK",
+                Description = "Prevent AFK kick",
+                Default = CONFIG.ANTI_AFK
+            }, function(value)
+                CONFIG.ANTI_AFK = value
+                setupAntiAFK()
+            end)
+            
+            -- Teleport Category
+            local TeleportCategory = Window:Category("Teleport", "http://www.roblox.com/asset/?id=8395621517")
+            local TeleportButton = TeleportCategory:Button("Teleport Options", "http://www.roblox.com/asset/?id=8395747586")
+            local TeleportSection = TeleportButton:Section("Teleport Controls", "Left")
+            
+            TeleportSection:Button({
+                Title = "TP to Nearest Chest",
+                ButtonName = "Teleport",
+                Description = "Teleport to the nearest chest"
+            }, function()
+                local found = {}
+                for obj, data in pairs(objectData) do
+                    if data.category == "CHEST" and obj and obj.Parent then
+                        local mainPart = getMainPart(obj)
+                        if mainPart then
+                            local char = localPlayer.Character
+                            if char and char:FindFirstChild("HumanoidRootPart") then
+                                local dist = (char.HumanoidRootPart.Position - mainPart.Position).Magnitude
+                                table.insert(found, {obj = obj, dist = dist, pos = mainPart.Position})
+                            end
+                        end
+                    end
+                end
+                if #found > 0 then
+                    table.sort(found, function(a, b) return a.dist < b.dist end)
+                    local char = localPlayer.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    if root then 
+                        stepTeleport(root, found[1].pos)
+                        sendNotification("Teleport", "Teleported to nearest chest!", 3)
+                    end
+                else
+                    sendNotification("Teleport", "No chests found!", 3)
+                end
+            end)
+            
+            TeleportSection:Button({
+                Title = "TP to Spawn",
+                ButtonName = "Teleport",
+                Description = "Teleport back to spawn"
+            }, function()
+                local char = localPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then 
+                    stepTeleport(root, spawnPoint)
+                    sendNotification("Teleport", "Teleported to spawn!", 3)
+                end
+            end)
+            
+            TeleportSection:Button({
+                Title = "TP to Nearest Camp",
+                ButtonName = "Teleport",
+                Description = "Teleport to the nearest camp"
+            }, function()
+                local found = {}
+                for obj, data in pairs(objectData) do
+                    if data.category == "CAMP" and obj and obj.Parent then
+                        local mainPart = getMainPart(obj)
+                        if mainPart then
+                            local char = localPlayer.Character
+                            if char and char:FindFirstChild("HumanoidRootPart") then
+                                local dist = (char.HumanoidRootPart.Position - mainPart.Position).Magnitude
+                                table.insert(found, {obj = obj, dist = dist, pos = mainPart.Position})
+                            end
+                        end
+                    end
+                end
+                if #found > 0 then
+                    table.sort(found, function(a, b) return a.dist < b.dist end)
+                    local char = localPlayer.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    if root then 
+                        stepTeleport(root, found[1].pos)
+                        sendNotification("Teleport", "Teleported to nearest camp!", 3)
+                    end
+                else
+                    sendNotification("Teleport", "No camps found!", 3)
+                end
+            end)
+            
+            TeleportSection:Slider({
+                Title = "Teleport Offset Y",
+                Description = "Y offset for teleportation",
+                Default = CONFIG.STEP_TP_OFFSET_Y,
+                Min = 0,
+                Max = 20
+            }, function(value)
+                CONFIG.STEP_TP_OFFSET_Y = value
+            end)
+            
+            TeleportSection:Slider({
+                Title = "Teleport Repeats",
+                Description = "Number of teleport steps",
+                Default = CONFIG.STEP_TP_REPEAT,
+                Min = 1,
+                Max = 50
+            }, function(value)
+                CONFIG.STEP_TP_REPEAT = value
+            end)
+            
+            -- Utility Category
+            local UtilityCategory = Window:Category("Utility", "http://www.roblox.com/asset/?id=8395621517")
+            local UtilityButton = UtilityCategory:Button("Utility Functions", "http://www.roblox.com/asset/?id=8395747586")
+            local UtilitySection = UtilityButton:Section("Utility Controls", "Left")
+            
+            UtilitySection:Button({
+                Title = "Refresh ESP",
+                ButtonName = "Refresh",
+                Description = "Refresh all ESP objects"
+            }, function()
+                print("Refreshing ESP...")
+                for obj, data in pairs(objectData) do 
+                    removeESP(obj) 
+                end
+                objectData = {}
+                chestCounter = 0
+                campCounter = 0
+                chestIdByObject = setmetatable({}, {__mode="k"})
+                campIdByObject = setmetatable({}, {__mode="k"})
+                task.spawn(function()
+                    for _, obj in ipairs(Workspace:GetChildren()) do
+                        registerObject(obj)
+                        for _, child in ipairs(obj:GetDescendants()) do 
+                            registerObject(child) 
+                        end
+                    end
+                end)
+                sendNotification("ESP", "ESP refreshed!", 3)
+            end)
+            
+            UtilitySection:Button({
+                Title = "Show Statistics",
+                ButtonName = "Show Stats",
+                Description = "Show ESP object count"
+            }, function()
+                local counts = {chest=0,item=0,resource=0,npc=0,mob=0,camp=0,player=0}
+                for obj, data in pairs(objectData) do
+                    if obj and obj.Parent then
+                        local cat = data.category:lower()
+                        counts[cat] = (counts[cat] or 0) + 1
+                    end
+                end
+                local total = 0
+                for _, v in pairs(counts) do total = total + v end
+                local statsText = string.format("Total: %d | Chests: %d | Items: %d | Resources: %d | NPCs: %d | Mobs: %d | Camps: %d | Players: %d", 
+                    total, counts.chest, counts.item, counts.resource, counts.npc, counts.mob, counts.camp, counts.player)
+                sendNotification("ESP Statistics", statsText, 8)
+                print("ESP Stats:", statsText)
+            end)
+            
+            UtilitySection:Button({
+                Title = "Clear All ESP",
+                ButtonName = "Clear",
+                Description = "Remove all ESP objects"
+            }, function()
+                for obj, data in pairs(objectData) do 
+                    removeESP(obj) 
+                end
+                objectData = {}
+                chestCounter = 0
+                campCounter = 0
+                chestIdByObject = setmetatable({}, {__mode="k"})
+                campIdByObject = setmetatable({}, {__mode="k"})
+                sendNotification("ESP", "All ESP cleared!", 3)
+            end)
+            
+            -- Keybinds Section
+            local KeybindSection = UtilityButton:Section("Keybinds", "Right")
+            
+            KeybindSection:Keybind({
+                Title = "Toggle ESP",
+                Description = "Toggle ESP on/off",
+                Default = Enum.KeyCode.F1,
+            }, function(key)
+                -- Keybind wird automatisch gesetzt
+            end)
+            
+            KeybindSection:Keybind({
+                Title = "Toggle Speed",
+                Description = "Toggle speed boost",
+                Default = Enum.KeyCode.F2,
+            }, function(key)
+                -- Keybind wird automatisch gesetzt
+            end)
+            
+            KeybindSection:Keybind({
+                Title = "Toggle NoClip",
+                Description = "Toggle noclip",
+                Default = Enum.KeyCode.F3,
+            }, function(key)
+                -- Keybind wird automatisch gesetzt
+            end)
+            
+            KeybindSection:Keybind({
+                Title = "Toggle Fly",
+                Description = "Toggle fly mode",
+                Default = Enum.KeyCode.F4,
+            }, function(key)
+                -- Keybind wird automatisch gesetzt
+            end)
+            
+            KeybindSection:Keybind({
+                Title = "TP to Chest",
+                Description = "Teleport to nearest chest",
+                Default = Enum.KeyCode.F6,
+            }, function(key)
+                -- Keybind wird automatisch gesetzt
+            end)
+            
+            print("Hydra UI created successfully!")
+            sendNotification("Noctis Utility V2", "Hydra UI loaded successfully!", 5)
+        end)
+        
+        if not success then
+            warn("Failed to create Hydra UI:", result)
+            -- Fallback to simple GUI
+            createSimpleGUI()
+        end
+    else
+        -- Fallback to simple GUI if Hydra UI fails to load
+        createSimpleGUI()
+    end
+end)
+
+-- Einfache GUI Creation (Fallback)
+local function createSimpleGUI()
+    local success, result = pcall(function()
+        -- Erstelle eine einfache ScreenGui
+        local ScreenGui = Instance.new("ScreenGui")
+        ScreenGui.Name = "NoctisUtility"
+        ScreenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+        
+        -- Main Frame
+        local MainFrame = Instance.new("Frame")
+        MainFrame.Name = "MainFrame"
+        MainFrame.Size = UDim2.new(0, 300, 0, 400)
+        MainFrame.Position = UDim2.new(0, 50, 0, 50)
+        MainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        MainFrame.BorderSizePixel = 0
+        MainFrame.Active = true
+        MainFrame.Draggable = true
+        MainFrame.Parent = ScreenGui
+        
+        -- Corner Radius
+        local Corner = Instance.new("UICorner")
+        Corner.CornerRadius = UDim.new(0, 8)
+        Corner.Parent = MainFrame
+        
+        -- Title
+        local Title = Instance.new("TextLabel")
+        Title.Name = "Title"
+        Title.Size = UDim2.new(1, 0, 0, 30)
+        Title.Position = UDim2.new(0, 0, 0, 0)
+        Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        Title.BorderSizePixel = 0
+        Title.Text = "Noctis Utility V2"
+        Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Title.TextScaled = true
+        Title.Font = Enum.Font.GothamSemibold
+        Title.Parent = MainFrame
+        
+        local TitleCorner = Instance.new("UICorner")
+        TitleCorner.CornerRadius = UDim.new(0, 8)
+        TitleCorner.Parent = Title
+        
+        -- Close Button
+        local CloseBtn = Instance.new("TextButton")
+        CloseBtn.Name = "CloseBtn"
+        CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+        CloseBtn.Position = UDim2.new(1, -35, 0, 0)
+        CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        CloseBtn.BorderSizePixel = 0
+        CloseBtn.Text = "X"
+        CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        CloseBtn.TextScaled = true
+        CloseBtn.Font = Enum.Font.GothamBold
+        CloseBtn.Parent = MainFrame
+        
+        local CloseBtnCorner = Instance.new("UICorner")
+        CloseBtnCorner.CornerRadius = UDim.new(0, 4)
+        CloseBtnCorner.Parent = CloseBtn
+        
+        CloseBtn.MouseButton1Click:Connect(function()
+            ScreenGui:Destroy()
+        end)
+        
+        -- ScrollFrame für Controls
+        local ScrollFrame = Instance.new("ScrollingFrame")
+        ScrollFrame.Name = "ScrollFrame"
+        ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
+        ScrollFrame.Position = UDim2.new(0, 10, 0, 40)
+        ScrollFrame.BackgroundTransparency = 1
+        ScrollFrame.BorderSizePixel = 0
+        ScrollFrame.ScrollBarThickness = 8
+        ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1200)
+        ScrollFrame.Parent = MainFrame
+        
+        -- UI Layout
+        local Layout = Instance.new("UIListLayout")
+        Layout.SortOrder = Enum.SortOrder.LayoutOrder
+        Layout.Padding = UDim.new(0, 5)
+        Layout.Parent = ScrollFrame
+        
+        -- Toggle Funktion
+        local function createToggle(name, configKey, callback)
+            local ToggleFrame = Instance.new("Frame")
+            ToggleFrame.Name = name .. "Toggle"
+            ToggleFrame.Size = UDim2.new(1, 0, 0, 30)
+            ToggleFrame.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            ToggleFrame.BorderSizePixel = 0
+            ToggleFrame.Parent = ScrollFrame
+            
+            local ToggleCorner = Instance.new("UICorner")
+            ToggleCorner.CornerRadius = UDim.new(0, 4)
+            ToggleCorner.Parent = ToggleFrame
+            
+            local ToggleLabel = Instance.new("TextLabel")
+            ToggleLabel.Name = "Label"
+            ToggleLabel.Size = UDim2.new(1, -60, 1, 0)
+            ToggleLabel.Position = UDim2.new(0, 10, 0, 0)
+            ToggleLabel.BackgroundTransparency = 1
+            ToggleLabel.Text = name
+            ToggleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+            ToggleLabel.TextScaled = true
+            ToggleLabel.Font = Enum.Font.Gotham
+            ToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+            ToggleLabel.Parent = ToggleFrame
+            
+            local ToggleBtn = Instance.new("TextButton")
+            ToggleBtn.Name = "Button"
+            ToggleBtn.Size = UDim2.new(0, 40, 0, 20)
+            ToggleBtn.Position = UDim2.new(1, -50, 0, 5)
+            ToggleBtn.BackgroundColor3 = CONFIG[configKey] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+            ToggleBtn.BorderSizePixel = 0
+            ToggleBtn.Text = CONFIG[configKey] and "ON" or "OFF"
+            ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            ToggleBtn.TextScaled = true
+            ToggleBtn.Font = Enum.Font.GothamBold
+            ToggleBtn.Parent = ToggleFrame
+            
+            local BtnCorner = Instance.new("UICorner")
+            BtnCorner.CornerRadius = UDim.new(0, 4)
+            BtnCorner.Parent = ToggleBtn
+            
+            ToggleBtn.MouseButton1Click:Connect(function()
+                CONFIG[configKey] = not CONFIG[configKey]
+                ToggleBtn.BackgroundColor3 = CONFIG[configKey] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+                ToggleBtn.Text = CONFIG[configKey] and "ON" or "OFF"
+                if callback then callback(CONFIG[configKey]) end
+            end)
+        end
+        
+        -- Button Funktion
+        local function createButton(name, callback)
+            local ButtonFrame = Instance.new("TextButton")
+            ButtonFrame.Name = name .. "Button"
+            ButtonFrame.Size = UDim2.new(1, 0, 0, 30)
+            ButtonFrame.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+            ButtonFrame.BorderSizePixel = 0
+            ButtonFrame.Text = name
+            ButtonFrame.TextColor3 = Color3.fromRGB(255, 255, 255)
+            ButtonFrame.TextScaled = true
+            ButtonFrame.Font = Enum.Font.Gotham
+            ButtonFrame.Parent = ScrollFrame
+            
+            local ButtonCorner = Instance.new("UICorner")
+            ButtonCorner.CornerRadius = UDim.new(0, 4)
+            ButtonCorner.Parent = ButtonFrame
+            
+            ButtonFrame.MouseButton1Click:Connect(function()
+                if callback then callback() end
+            end)
+        end
+        
+        -- ESP Controls
+        createToggle("Enable ESP", "ENABLED")
+        createToggle("Show Chests", "SHOW_CHESTS")
+        createToggle("Show Items", "SHOW_ITEMS")
+        createToggle("Show Resources", "SHOW_RESOURCES")
+        createToggle("Show Players", "SHOW_PLAYERS")
+        createToggle("Show NPCs", "SHOW_NPCS")
+        createToggle("Show Mobs", "SHOW_MOBS")
+        createToggle("Show Camps", "SHOW_CAMPS")
+        
+        -- Movement Controls
+        createToggle("Speed Boost", "SPEED_BOOST", setupSpeedBoost)
+        createToggle("Infinite Jump", "INFINITE_JUMP", setupInfiniteJump)
+        createToggle("NoClip", "NOCLIP", setupNoclip)
+        createToggle("Fly Mode", "FLY_MODE", setupFlyMode)
+        createToggle("God Mode", "GOD_MODE", setupGodMode)
+        createToggle("Invisible", "INVISIBLE", setupInvisible)
+        createToggle("Anti-AFK", "ANTI_AFK", setupAntiAFK)
+        
+        -- Utility Buttons
+        createButton("TP to Nearest Chest", function()
+            local found = {}
+            for obj, data in pairs(objectData) do
+                if data.category == "CHEST" and obj and obj.Parent then
+                    local mainPart = getMainPart(obj)
+                    if mainPart then
+                        local char = localPlayer.Character
+                        if char and char:FindFirstChild("HumanoidRootPart") then
+                            local dist = (char.HumanoidRootPart.Position - mainPart.Position).Magnitude
+                            table.insert(found, {obj = obj, dist = dist, pos = mainPart.Position})
+                        end
+                    end
+                end
+            end
+            if #found > 0 then
+                table.sort(found, function(a, b) return a.dist < b.dist end)
+                local char = localPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then 
+                    stepTeleport(root, found[1].pos)
+                    sendNotification("Teleport", "Teleported to nearest chest!", 3)
+                end
+            else
+                sendNotification("Teleport", "No chests found!", 3)
+            end
+        end)
+        
+        createButton("TP to Spawn", function()
+            local char = localPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then 
+                stepTeleport(root, spawnPoint)
+                sendNotification("Teleport", "Teleported to spawn!", 3)
+            end
+        end)
+        
+        createButton("Refresh ESP", function()
+            print("Refreshing ESP...")
+            for obj, data in pairs(objectData) do 
+                removeESP(obj) 
+            end
+            objectData = {}
+            task.spawn(function()
+                for _, obj in ipairs(Workspace:GetChildren()) do
+                    registerObject(obj)
+                    for _, child in ipairs(obj:GetDescendants()) do 
+                        registerObject(child) 
+                    end
+                end
+            end)
+            sendNotification("ESP", "ESP refreshed!", 3)
+        end)
+        
+        createButton("Show Statistics", function()
+            local counts = {chest=0,item=0,resource=0,npc=0,mob=0,camp=0,player=0}
+            for obj, data in pairs(objectData) do
+                if obj and obj.Parent then
+                    local cat = data.category:lower()
+                    counts[cat] = (counts[cat] or 0) + 1
+                end
+            end
+            local total = 0
+            for _, v in pairs(counts) do total = total + v end
+            sendNotification("ESP Statistics", string.format("Total Objects: %d", total), 5)
+        end)
+        
+        -- Toggle Hotkey
+        UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.KeyCode == Enum.KeyCode.Insert then
+                MainFrame.Visible = not MainFrame.Visible
+            end
+        end)
+        
+        return ScreenGui
+    end)
+    
+    if success then
+        print("Simple GUI created successfully!")
+        sendNotification("Noctis Utility V2", "Fallback GUI loaded! INSERT to toggle", 5)
+        return result
+    else
+        warn("Failed to create simple GUI:", result)
+        return nil
+    end
+end
+
+-- Hotkeys (funktionieren immer, auch ohne UI)
+local hotkeyConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    pcall(function()
+        if input.KeyCode == Enum.KeyCode.F1 then
+            CONFIG.ENABLED = not CONFIG.ENABLED
+            print("ESP toggled:", CONFIG.ENABLED)
+            sendNotification("ESP Toggle", "ESP " .. (CONFIG.ENABLED and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F2 then
+            CONFIG.SPEED_BOOST = not CONFIG.SPEED_BOOST
+            setupSpeedBoost()
+            print("Speed Boost toggled:", CONFIG.SPEED_BOOST)
+            sendNotification("Speed Boost", "Speed Boost " .. (CONFIG.SPEED_BOOST and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F3 then
+            CONFIG.NOCLIP = not CONFIG.NOCLIP
+            setupNoclip()
+            print("NoClip toggled:", CONFIG.NOCLIP)
+            sendNotification("NoClip", "NoClip " .. (CONFIG.NOCLIP and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F4 then
+            CONFIG.FLY_MODE = not CONFIG.FLY_MODE
+            setupFlyMode()
+            print("Fly Mode toggled:", CONFIG.FLY_MODE)
+            sendNotification("Fly Mode", "Fly Mode " .. (CONFIG.FLY_MODE and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F5 then
+            -- ESP Statistics hotkey
+            local counts = {chest=0,item=0,resource=0,npc=0,mob=0,camp=0,player=0}
+            for obj, data in pairs(objectData) do
+                if obj and obj.Parent then
+                    local cat = data.category:lower()
+                    counts[cat] = (counts[cat] or 0) + 1
+                end
+            end
+            local total = 0
+            for _, v in pairs(counts) do total = total + v end
+            print(string.format("F5 Stats - Total Objects: %d", total))
+            sendNotification("ESP Stats (F5)", string.format("Objects found: %d", total), 3)
+        elseif input.KeyCode == Enum.KeyCode.F6 then
+            -- Teleport to nearest chest hotkey
+            local found = {}
+            for obj, data in pairs(objectData) do
+                if data.category == "CHEST" and obj and obj.Parent then
+                    local mainPart = getMainPart(obj)
+                    if mainPart then
+                        local char = localPlayer.Character
+                        if char and char:FindFirstChild("HumanoidRootPart") then
+                            local dist = (char.HumanoidRootPart.Position - mainPart.Position).Magnitude
+                            table.insert(found, {obj = obj, dist = dist, pos = mainPart.Position})
+                        end
+                    end
+                end
+            end
+            if #found > 0 then
+                table.sort(found, function(a, b) return a.dist < b.dist end)
+                local char = localPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then 
+                    stepTeleport(root, found[1].pos) 
+                    sendNotification("Teleport", "Teleported to nearest chest!", 3)
+                end
+            else
+                print("No chests found!")
+                sendNotification("Teleport", "No chests found!", 3)
+            end
+        elseif input.KeyCode == Enum.KeyCode.F7 then
+            -- God Mode toggle
+            CONFIG.GOD_MODE = not CONFIG.GOD_MODE
+            setupGodMode()
+            print("God Mode toggled:", CONFIG.GOD_MODE)
+            sendNotification("God Mode", "God Mode " .. (CONFIG.GOD_MODE and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F8 then
+            -- Invisible toggle
+            CONFIG.INVISIBLE = not CONFIG.INVISIBLE
+            setupInvisible()
+            print("Invisible toggled:", CONFIG.INVISIBLE)
+            sendNotification("Invisible", "Invisible " .. (CONFIG.INVISIBLE and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F9 then
+            -- Infinite Jump toggle
+            CONFIG.INFINITE_JUMP = not CONFIG.INFINITE_JUMP
+            setupInfiniteJump()
+            print("Infinite Jump toggled:", CONFIG.INFINITE_JUMP)
+            sendNotification("Infinite Jump", "Infinite Jump " .. (CONFIG.INFINITE_JUMP and "enabled" or "disabled"), 3)
+        elseif input.KeyCode == Enum.KeyCode.F10 then
+            -- Anti-AFK toggle
+            CONFIG.ANTI_AFK = not CONFIG.ANTI_AFK
+            setupAntiAFK()
+            print("Anti-AFK toggled:", CONFIG.ANTI_AFK)
+            sendNotification("Anti-AFK", "Anti-AFK " .. (CONFIG.ANTI_AFK and "enabled" or "disabled"), 3)
+        end
+    end)
+end)
+
+table.insert(connections, hotkeyConnection)
+
+-- Cleanup function
+local function cleanup()
+    destroyed = true
+    
+    print("Starting cleanup...")
+    
+    -- Disconnect all connections safely
+    for i, conn in pairs(connections) do
+        safeDisconnect(conn)
+        connections[i] = nil
+    end
+    
+    -- Disconnect feature connections
+    safeDisconnect(jumpConnection)
+    safeDisconnect(noclipConnection)
+    safeDisconnect(flyConnection)
+    
+    if antiAFKConnection then 
+        pcall(function() task.cancel(antiAFKConnection) end)
+        antiAFKConnection = nil
+    end
+    
+    if bodyVelocity then 
+        pcall(function() bodyVelocity:Destroy() end)
+        bodyVelocity = nil
+    end
+    
+    -- Clean up ESP
+    for obj, data in pairs(objectData) do
+        removeESP(obj)
+    end
+    objectData = {}
+    
+    print("Noctis Utility V2 - Cleaned up")
+end
+
+-- Auto cleanup on game leave
+local leaveConnection = game.Players.PlayerRemoving:Connect(function(player)
+    if player == localPlayer then
+        cleanup()
+    end
+end)
+table.insert(connections, leaveConnection)
+
+-- Notification
+sendNotification("Noctis Utility V2", "ESP running! F1=Toggle ESP, F2=Speed, F3=NoClip, F4=Fly", 10)
+
+print("ESP system active!")
+
+-- Final messages
+print("Noctis Utility V2 - Completely loaded!")
+print("Hotkeys: F1=ESP, F2=Speed, F3=NoClip, F4=Fly, F5=Stats, F6=TP Chest, F7=God, F8=Invisible, F9=Jump, F10=AFK")
+print("GUI will be loaded in 3 seconds...")
+print("Hydra UI will be tried first, fallback GUI on failure")
